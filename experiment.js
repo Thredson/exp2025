@@ -480,7 +480,6 @@ const demographics = {
 const final_screen = {
     type: jsPsychHtmlKeyboardResponse,
     stimulus: function() {
-        // Display total reward count
         return `<h2>Experiment Complete!</h2>
                <p>Thank you for your participation in this study.</p>
                <br>
@@ -620,4 +619,5 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
