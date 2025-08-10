@@ -503,7 +503,7 @@ const final_screen = {
                         📥 Download Data File (Required)
                     </button>
                 </div>
-                <p id="exit-instruction"><em>Data is being saved automatically. You may close this tab or press any key to exit.</em></p>`;
+                <p id="exit-instruction"><em>Data is being saved automatically.</em></p>`;
     },
     choices: "ALL_KEYS",
     on_start: function() {
@@ -620,3 +620,4 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
