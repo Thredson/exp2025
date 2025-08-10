@@ -3,7 +3,7 @@ const jsPsych = initJsPsych({
     show_progress_bar: true,
     auto_update_progress_bar: true,
     on_finish: function(data) {
-        console.log('Experiment fully completed - participant pressed key to exit');
+        console.log('Experiment fully completed');
     }
 });
 
@@ -541,7 +541,7 @@ const final_screen = {
             // Update exit instruction
             const exitInstruction = document.getElementById('exit-instruction');
             if (exitInstruction) {
-                exitInstruction.innerHTML = '<em>Data saved successfully! You may close this tab or press any key to exit.</em>';
+                exitInstruction.innerHTML = '<em>Data saved successfully! You may close this tab to exit.</em>';
             }
         })
         .catch(error => {
@@ -619,6 +619,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
