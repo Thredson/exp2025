@@ -483,59 +483,123 @@ const final_screen = {
         // Display total reward count
         return `<h2>Experiment Complete!</h2>
                <p>Thank you for your participation in this study.</p>
-               <p>Your data has been recorded.</p>
                <br>
-                <p><strong>Please click the button to download your data if you have lost connection to the server:</strong></p>
-                <button id="download-btn" style="
-                    background-color: #007bff;
-                    color: white;
-                    border: none;
-                    padding: 15px 30px;
-                    font-size: 18px;
-                    border-radius: 5px;
-                    cursor: pointer;
-                    margin: 20px 0;
-                " onmouseover="this.style.backgroundColor='#0056b3'" 
-                   onmouseout="this.style.backgroundColor='#007bff'">
-                    📥 Download Data File
-                </button>
-                <br>
-               <p>Press any key to close the tab.</p>`;
+                <div id="upload-status" style="margin: 20px 0; padding: 15px; border-radius: 5px; background-color: #f8f9fa;">
+                    <p>📤 Uploading data to server...</p>
+                </div>
+                <div id="download-section" style="display: none;">
+                    <p><strong>Server upload failed. Please download your data manually:</strong></p>
+                    <button id="download-btn" style="
+                        background-color: #dc3545;
+                        color: white;
+                        border: none;
+                        padding: 15px 30px;
+                        font-size: 18px;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        margin: 20px 0;
+                    " onmouseover="this.style.backgroundColor='#c82333'" 
+                       onmouseout="this.style.backgroundColor='#dc3545'">
+                        📥 Download Data File (Required)
+                    </button>
+                </div>
+                <p id="exit-instruction"><em>Data is being saved automatically. You may close this tab or press any key to exit.</em></p>`;
     },
     choices: "ALL_KEYS",
     on_start: function() {
-        setTimeout(function() {
-            const downloadBtn = document.getElementById('download-btn');
-            if (downloadBtn) {
-                downloadBtn.addEventListener('click', function() {
-                    const allData = jsPsych.data.get().values();
-                    const jsonData = JSON.stringify(allData, null, 2);
-                    
-                    // Create filename with timestamp and condition
-                    const timestamp = new Date().toISOString().slice(0,19).replace(/:/g, '-');
-                    const filename = `data_${CONDITION}_${timestamp}.json`;
-                    
-                    // Create and download JSON file
-                    const blob = new Blob([jsonData], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    
-                    // Update button to show download completed
-                    downloadBtn.innerHTML = '✅ Data Downloaded Successfully!';
-                    downloadBtn.style.backgroundColor = '#28a745';
-                    downloadBtn.disabled = true;
-                    downloadBtn.style.cursor = 'default';
-                    
-                    console.log('Data downloaded:', filename);
-                });
+        // Prepare data
+        const allData = jsPsych.data.get().values();
+        const jsonData = JSON.stringify(allData, null, 2); // Same format for both DataPipe and local
+        
+        // Create filename with timestamp and condition
+        const timestamp = new Date().toISOString().slice(0,19).replace(/:/g, '-');
+        const filename = `data_${CONDITION}_${timestamp}.json`;
+        
+        // Send JSON data to DataPipe
+        fetch("https://pipe.jspsych.org/api/data/", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "*/*",
+            },
+            body: JSON.stringify({
+                experimentID: "pgVYBO7khUHm",
+                filename: filename,
+                data: jsonData,
+            }),
+        })
+        .then(response => response.json())
+        .then(result => {
+            console.log('Data successfully uploaded to DataPipe:', result);
+            
+            // Update upload status to success
+            const statusDiv = document.getElementById('upload-status');
+            if (statusDiv) {
+                statusDiv.innerHTML = '<p style="color: green;">✅ Data successfully uploaded to server!</p>';
+                statusDiv.style.backgroundColor = '#d4edda';
             }
-        }, 100); // make sure the HTML is fully rendered
+            
+            // Update exit instruction
+            const exitInstruction = document.getElementById('exit-instruction');
+            if (exitInstruction) {
+                exitInstruction.innerHTML = '<em>Data saved successfully! You may close this tab or press any key to exit.</em>';
+            }
+        })
+        .catch(error => {
+            console.error('Error uploading to DataPipe:', error);
+            
+            // Update upload status to failed
+            const statusDiv = document.getElementById('upload-status');
+            if (statusDiv) {
+                statusDiv.innerHTML = '<p style="color: red;">❌ Server upload failed.</p>';
+                statusDiv.style.backgroundColor = '#f8d7da';
+            }
+            
+            // Show download section
+            const downloadSection = document.getElementById('download-section');
+            if (downloadSection) {
+                downloadSection.style.display = 'block';
+            }
+            
+            // Update exit instruction
+            const exitInstruction = document.getElementById('exit-instruction');
+            if (exitInstruction) {
+                exitInstruction.innerHTML = '<em>Please download your data before closing this tab.</em>';
+            }
+            
+            // Set up download button
+            setTimeout(function() {
+                const downloadBtn = document.getElementById('download-btn');
+                if (downloadBtn) {
+                    downloadBtn.addEventListener('click', function() {
+                        // Create and download JSON file
+                        const blob = new Blob([jsonData], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        
+                        // Update button to show download completed
+                        downloadBtn.innerHTML = '✅ Data Downloaded Successfully!';
+                        downloadBtn.style.backgroundColor = '#28a745';
+                        downloadBtn.disabled = true;
+                        downloadBtn.style.cursor = 'default';
+                        
+                        // Update exit instruction
+                        const exitInstruction = document.getElementById('exit-instruction');
+                        if (exitInstruction) {
+                            exitInstruction.innerHTML = '<em>Data saved! You may now close this tab or press any key to exit.</em>';
+                        }
+                        
+                        console.log('Data downloaded locally:', filename);
+                    });
+                }
+            }, 100);
+        });
     },
     on_finish: function() {
         window.close(); // Close the tab after completion
@@ -544,7 +608,7 @@ const final_screen = {
 
 // Add all components to timeline
 // timeline.unshift(strategychoice);
-// timeline.unshift(final_screen);
+timeline.unshift(final_screen);
 timeline.unshift(randomization_record);
 timeline.unshift(instructions);
 timeline.unshift(consent);
@@ -554,4 +618,5 @@ timeline.push(demographics);
 timeline.push(final_screen);
 
 // Run the experiment
+
 jsPsych.run(timeline);
