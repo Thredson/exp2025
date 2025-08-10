@@ -499,7 +499,7 @@ const final_screen = {
                         margin: 20px 0;
                     " onmouseover="this.style.backgroundColor='#c82333'" 
                        onmouseout="this.style.backgroundColor='#dc3545'">
-                        📥 Download Data File (Required)
+                        📥 Download Data File
                     </button>
                 </div>
                 <p id="exit-instruction"><em>Data is being saved automatically.</em></p>`;
@@ -619,5 +619,6 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
