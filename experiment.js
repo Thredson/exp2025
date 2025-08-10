@@ -607,7 +607,7 @@ const final_screen = {
 
 // Add all components to timeline
 // timeline.unshift(strategychoice);
-// timeline.unshift(final_screen);
+timeline.unshift(final_screen);
 timeline.unshift(randomization_record);
 timeline.unshift(instructions);
 timeline.unshift(consent);
@@ -619,6 +619,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
