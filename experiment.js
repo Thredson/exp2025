@@ -486,7 +486,9 @@ const final_screen = {
                     <p>📤 Uploading data to server...</p>
                 </div>
                 <div id="download-section" style="display: none;">
-                    <p><strong>Server upload failed. Please download your data manually:</strong></p>
+                    <p><strong>Sorry, there was an issue uploading your data to our server. Please upload your data manually</strong></p>
+                    <p><strong>Please click the button below to save your data file to your computer. You can find it in your download folder</strong></p>
+                    <p id="download-info"><strong>(Json is a safe file type developed for data interchange purposes, which saves data in a structured format that is easy to read and write for both humans and machines.)</strong></p>
                     <button id="download-btn" style="
                         background-color: #dc3545;
                         color: white;
@@ -500,6 +502,7 @@ const final_screen = {
                        onmouseout="this.style.backgroundColor='#dc3545'">
                         📥 Download Data File
                     </button>
+
                 </div>
                 <p id="exit-instruction"><em>Data is being saved automatically.</em></p>`;
     },
@@ -528,14 +531,16 @@ const final_screen = {
         })
         .then(response => response.json())
         .then(result => {
-
-            // throw error if data collection is not enabled in dataPipe
-            if (result.error || result.message) {
+            
+            // error handling
+            /*
+            if ((result.error || result.message)&&(result.message != "Success")) {
+            // This is actually an error, even though status was 200
                 throw new Error(result.message || result.error);
             }
+            */
             
             console.log('Data successfully uploaded to DataPipe:', result);
-            
             // Update upload status to success
             const statusDiv = document.getElementById('upload-status');
             if (statusDiv) {
@@ -546,7 +551,7 @@ const final_screen = {
             // Update exit instruction
             const exitInstruction = document.getElementById('exit-instruction');
             if (exitInstruction) {
-                exitInstruction.innerHTML = '<em>Data saved successfully! You may close this tab to exit.</em>';
+                exitInstruction.innerHTML = '<em>Data saved successfully! You may close the tab to exit.</em>';
             }
         })
         .catch(error => {
@@ -568,7 +573,7 @@ const final_screen = {
             // Update exit instruction
             const exitInstruction = document.getElementById('exit-instruction');
             if (exitInstruction) {
-                exitInstruction.innerHTML = '<em>Please download your data before closing this tab.</em>';
+                exitInstruction.innerHTML = '<em>Please download and upload your data before closing this tab.</em>';
             }
             
             // Set up download button
@@ -596,7 +601,10 @@ const final_screen = {
                         // Update exit instruction
                         const exitInstruction = document.getElementById('exit-instruction');
                         if (exitInstruction) {
-                            exitInstruction.innerHTML = '<em>Data saved! You may now close this tab or press any key to exit.</em>';
+                            exitInstruction.innerHTML = `<em>Data saved successfully! 
+                            Please upload it via <a href="https://docs.google.com/forms/d/e/1FAIpQLSdyHMqWbAJjq00CLB6Ki91yXaHwyIC1wAcUXqZ3yU2aOcoWrg/viewform?usp=dialog" 
+                            target="_blank" style="color: #007bff; text-decoration: underline;">this Google form.</a> If you do not wish to sign in a google account, then 
+                            please email the data file directly to <strong>thredsontsai@gmail.com.</strong></em>`;
                         }
                         
                         console.log('Data downloaded locally:', filename);
@@ -624,6 +632,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
