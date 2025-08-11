@@ -475,6 +475,18 @@ const demographics = {
     ]
 };
 
+const Prolific = {
+    type: jsPsychSurveyText,
+    preamble: `<h2>Please enter your prolific ID before continuing the experiment</h2>`,
+    questions: [
+        {
+            prompt: "*please enter your prolific ID.",
+            name: 'prolific_ID',
+            required: true
+        },
+    ]
+};
+
 // Final screen
 const final_screen = {
     type: jsPsychHtmlKeyboardResponse,
@@ -621,6 +633,7 @@ const final_screen = {
 // Add all components to timeline
 // timeline.unshift(strategychoice);
 // timeline.unshift(final_screen);
+timeline.unshift(Prolific)
 timeline.unshift(randomization_record);
 timeline.unshift(instructions);
 timeline.unshift(consent);
@@ -632,6 +645,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
