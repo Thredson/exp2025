@@ -528,6 +528,12 @@ const final_screen = {
         })
         .then(response => response.json())
         .then(result => {
+
+            // throw error if data collection is not enabled in dataPipe
+            if (result.error || result.message) {
+                throw new Error(result.message || result.error);
+            }
+            
             console.log('Data successfully uploaded to DataPipe:', result);
             
             // Update upload status to success
@@ -618,6 +624,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
