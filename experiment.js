@@ -378,15 +378,14 @@ timeline.push({
     choices: "ALL_KEYS"
 });
 
+timeline.push({
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: `<h3>Testing Block</h3>
+                <p>Press any key to start this block.</p>`,
+    choices: "ALL_KEYS"
+});
 // Build testing phase  
-for (let block = 1; block <= TESTING_BLOCKS; block++) {
-    timeline.push({
-        type: jsPsychHtmlKeyboardResponse,
-        stimulus: `<h3>Testing Block</h3>
-                   <p>Press any key to start this block.</p>`,
-        choices: "ALL_KEYS"
-    });
-    
+for (let block = 1; block <= TESTING_BLOCKS; block++) {    
     const pairs = createTestingPairs();
     pairs.forEach(pair => {
         timeline.push(createChoiceTrial(pair, block, 'testing'));
@@ -504,7 +503,7 @@ const final_screen = {
                 </div>
                 <p id="exit-instruction"><em>Data is being saved automatically.</em></p>`;
     },
-    choices: "ALL_KEYS",
+    choices: "NO_KEYS",
     on_start: function() {
         // Prepare data
         const allData = jsPsych.data.get().values();
@@ -619,6 +618,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
