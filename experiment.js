@@ -487,8 +487,26 @@ const Prolific = {
     ]
 };
 
+function showNextButton() {
+    const nextButtonSection = document.getElementById('next-button-section');
+    if (nextButtonSection) {
+        nextButtonSection.style.display = 'block';
+    }
+            
+    // Set up next button click
+    setTimeout(function() {
+        const nextBtn = document.getElementById('next-btn');
+        if (nextBtn) {
+            nextBtn.addEventListener('click', function() {
+                // move to final screen
+                jsPsych.finishTrial();
+            });
+        }
+    }, 100);
+}
+
 // Final screen
-const final_screen = {
+const data_screen = {
     type: jsPsychHtmlKeyboardResponse,
     stimulus: function() {
         return `<h2>Experiment Complete!</h2>
@@ -514,9 +532,23 @@ const final_screen = {
                        onmouseout="this.style.backgroundColor='#dc3545'">
                         📥 Download Data File
                     </button>
-
                 </div>
-                <p id="exit-instruction"><em>Data is being saved automatically.</em></p>`;
+                <p id="exit-instruction"><em>Data is being saved automatically.</em></p>
+                <div id="next-button-section" style="display: none; margin-top: 30px;">
+                    <button id="next-btn" style="
+                        background-color: #28a745;
+                        color: white;
+                        border: none;
+                        padding: 15px 30px;
+                        font-size: 18px;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        margin: 20px 0;
+                    " onmouseover="this.style.backgroundColor='#218838'" 
+                       onmouseout="this.style.backgroundColor='#28a745'">
+                        ➡️ Continue
+                    </button>
+                </div>`;
     },
     choices: "NO_KEYS",
     on_start: function() {
@@ -565,6 +597,8 @@ const final_screen = {
             if (exitInstruction) {
                 exitInstruction.innerHTML = '<em>Data saved successfully! You may close the tab to exit.</em>';
             }
+
+            showNextButton();
         })
         .catch(error => {
             console.error('Error uploading to DataPipe:', error);
@@ -613,11 +647,18 @@ const final_screen = {
                         // Update exit instruction
                         const exitInstruction = document.getElementById('exit-instruction');
                         if (exitInstruction) {
-                            exitInstruction.innerHTML = `<em>Data saved successfully! 
+                            exitInstruction.innerHTML = `<strong>Data saved successfully! 
                             Please upload it via <a href="https://docs.google.com/forms/d/e/1FAIpQLSdyHMqWbAJjq00CLB6Ki91yXaHwyIC1wAcUXqZ3yU2aOcoWrg/viewform?usp=dialog" 
                             target="_blank" style="color: #007bff; text-decoration: underline;">this Google form.</a> If you do not wish to sign in a google account, then 
-                            please email the data file directly to <strong>thredsontsai@gmail.com.</strong></em>`;
+                            please email the data file directly to <em>thredsontsai@gmail.com.</strong></em>`;
                         }
+                        
+                        const nextBtn = document.getElementById('next-btn');
+                        if (nextBtn) {
+                            nextBtn.innerHTML = `✅ I have uploaded or emailed my data.`;
+                        }
+                        
+                        showNextButton();
                         
                         console.log('Data downloaded locally:', filename);
                     });
@@ -625,9 +666,16 @@ const final_screen = {
             }, 100);
         });
     },
-    on_finish: function() {
-        window.close(); // Close the tab after completion
-    }
+};
+
+const final_screen = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: `<h2>Thank You!</h2>
+               <p>Your participation in this study is now complete.</p>
+               <p>Please click <a href="https://app.prolific.com/submissions/complete?cc=C11BNLDM" target="_blank" style="color: #007bff; text-decoration: underline;">this link</a> to redirect to Prolific.</p>
+               <br>
+               <p><strong>You may now close this browser tab.</strong></p>`,
+    choices: "NO_KEYS"
 };
 
 // Add all components to timeline
@@ -640,11 +688,13 @@ timeline.unshift(consent);
 timeline.push(questionnaire);
 timeline.push(strategychoice);
 timeline.push(demographics);
+timeline.push(data_screen);
 timeline.push(final_screen);
 
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
