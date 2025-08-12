@@ -314,7 +314,7 @@ function createFeedbackTrial(phase) {
                 const lastTrial = jsPsych.data.getLastTrialData().values()[0];
                 
                 if (lastTrial.reward) {
-                    return `<div class="feedback reward">REWARD! +0.3 cents</div>`;
+                    return `<div class="feedback reward">REWARD! +0.3p</div>`;
                 } else {
                     return `<div class="feedback no-reward">No reward</div>`;
                 }
@@ -658,7 +658,7 @@ const data_screen = {
                             nextBtn.innerHTML = `✅ I have uploaded or emailed my data.`;
                         }
                         
-                        showNextButton();
+                        setTimeout(showNextButton,10000);
                         
                         console.log('Data downloaded locally:', filename);
                     });
@@ -694,6 +694,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
