@@ -595,7 +595,7 @@ const data_screen = {
             // Update exit instruction
             const exitInstruction = document.getElementById('exit-instruction');
             if (exitInstruction) {
-                exitInstruction.innerHTML = '<em>Data saved successfully! You may close the tab to exit.</em>';
+                exitInstruction.innerHTML = '<em>Data saved successfully!</em>';
             }
 
             showNextButton();
@@ -694,6 +694,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
