@@ -9,7 +9,7 @@ const jsPsych = initJsPsych({
 
 // TODO: FILL OUT APPROX. EXPERIMENT LENGTH
 
-var time = '10-15 minutes';
+var time = '8-12 minutes';
 
 
 const consent = {
@@ -672,7 +672,7 @@ const final_screen = {
     type: jsPsychHtmlKeyboardResponse,
     stimulus: `<h2>Thank You!</h2>
                <p>Your participation in this study is now complete.</p>
-               <p>Please click <a href="https://app.prolific.com/submissions/complete?cc=C11BNLDM" target="_blank" style="color: #007bff; text-decoration: underline;">this link</a> to redirect to Prolific.</p>
+               <p>Please click <a href="https://app.prolific.com/submissions/complete?cc=CQSWDEHQ" target="_blank" style="color: #007bff; text-decoration: underline;">this link</a> to redirect to Prolific.</p>
                <br>
                <p><strong>You may now close this browser tab.</strong></p>`,
     choices: "NO_KEYS"
@@ -694,6 +694,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
