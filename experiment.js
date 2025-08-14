@@ -80,8 +80,8 @@ const TRAINING_BLOCKS = 8;
 const TESTING_BLOCKS = 2;
 
 // Randomly assign participant to feature/non-feature condition
-const CONDITION = Math.random() < 0.5 ? 'feature' : 'non-feature';
-// const CONDITION = 'feature';
+// const CONDITION = Math.random() < 0.5 ? 'feature' : 'non-feature';
+const CONDITION = 'non-feature';
 console.log('Participant assigned to:', CONDITION, 'condition');
 
 // Image stimuli (A through F)
@@ -142,7 +142,7 @@ const instructions = {
          <p>Thank you for participating in this study! 
          <br> In this study, you will respond by <strong>selecting one of two pictures</strong> in each round. 
          <br> Each round, based on your response, you will receive either <strong> no reward</strong>
-         or <strong>a 0.3-cent bonus</strong>. Therefore, try your best to choose responses that 
+         or <strong>a 0.3p bonus</strong>. Therefore, try your best to choose responses that 
          may lead to <strong>higher rewards!</strong>
          <br>
          <br> There will be a training phase and a testing phase. 
@@ -694,6 +694,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
