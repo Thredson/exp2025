@@ -80,8 +80,8 @@ const TRAINING_BLOCKS = 8;
 const TESTING_BLOCKS = 2;
 
 // Randomly assign participant to feature/non-feature condition
-// const CONDITION = Math.random() < 0.5 ? 'feature' : 'non-feature';
-const CONDITION = 'non-feature';
+const CONDITION = Math.random() < 0.5 ? 'feature' : 'non-feature';
+// const CONDITION = 'non-feature';
 console.log('Participant assigned to:', CONDITION, 'condition');
 
 // Image stimuli (A through F)
@@ -694,6 +694,7 @@ timeline.push(final_screen);
 // Run the experiment
 
 jsPsych.run(timeline);
+
 
 
 
