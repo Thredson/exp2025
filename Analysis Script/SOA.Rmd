@@ -1,0 +1,1379 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# Load libraries
+library(rstan)
+library(jsonlite)
+library(tidyverse)
+library(gridExtra)
+library(bayesplot)
+
+# Set Stan options for better performance
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+# =============================================================================
+# Data Preparation Functions
+# =============================================================================
+
+
+clean_agent_json <- function(json_file) {
+  # Read the raw text
+  raw_text <- readLines(json_file, warn = FALSE)
+  
+  # Join all lines into a single string
+  json_string <- paste(raw_text, collapse = "")
+  
+  # Parse the JSON
+  data <- fromJSON(json_string, flatten = TRUE)
+  
+  return(data)
+}
+
+
+#' Load and prepare data from JSON file
+#' 
+#' @param json_file Path to JSON file containing participant data
+#' @return List formatted for Stan
+
+prepare_soa_data <- function(json_file, phase = "both") {
+  # Check if this is an agent file
+  if(grepl("agent", json_file, ignore.case = TRUE)) {
+    # Use special handling for agent files
+    data <- clean_agent_json(json_file)
+  } else {
+    # Load JSON data
+    data <- fromJSON(json_file, flatten = TRUE)
+  }
+
+  # cat("\nDEBUGGING - Column names in data:\n")
+  # cat(names(data), "\n")
+  
+  rand_cols <- grep("^randomized_images\\.", names(data), value = TRUE)
+  
+  if(length(rand_cols) > 0) {
+    true_mapping <- NULL
+    
+    for(i in 1:nrow(data)) {
+      # Check if this row has the randomized mapping
+      if(!is.na(data[[rand_cols[1]]][i])) {
+        # Extract the mapping from this row
+        true_mapping <- character()
+        
+        for(col in rand_cols) {
+          # Extract letter from column name (e.g., "randomized_images.A" -> "A")
+          rand_label <- gsub("randomized_images\\.", "", col)
+          # Get the filename from this column
+          filename <- data[[col]][i]
+          # Extract true letter from filename
+          true_letter <- gsub(".*image([A-F])\\.png.*", "\\1", filename)
+          # Store in mapping
+          true_mapping[rand_label] <- true_letter
+        }
+        
+        cat("Randomization mapping detected:\n")
+        for(label in names(true_mapping)) {
+          cat("  Randomized", label, "-> True image", true_mapping[label], "\n")
+        }
+        
+        break  # Stop after finding the mapping
+      }
+    }
+    
+    # If no mapping found (all NAs), use identity
+    if(is.null(true_mapping)) {
+      cat("No randomization mapping found, using identity mapping\n")
+      true_mapping <- c("A"="A", "B"="B", "C"="C", "D"="D", "E"="E", "F"="F")
+    }
+  }
+    # No randomized_images columns found
+    else {
+    cat("No randomization mapping found, using identity mapping\n")
+    true_mapping <- c("A"="A", "B"="B", "C"="C", "D"="D", "E"="E", "F"="F")
+    }
+
+  
+  # Filter for actual choice trials (exclude instructions, feedback, etc.)
+  choice_trials <- data[!is.na(data$pair) & data$pair != "", ]
+  
+  if(phase == "test") {
+    choice_trials <- choice_trials[choice_trials$phase == "testing", ]
+    cat("  Filtered to test phase only:", nrow(choice_trials), "trials\n")
+  }
+  
+    
+  # Replace randomized labels with true image identities in the pair strings
+  choice_trials$pair <- sapply(choice_trials$pair, function(p) {
+    if(is.na(p) || p == "") return(NA)
+    parts <- strsplit(p, "-")[[1]]
+    true_left <- true_mapping[parts[1]]
+    true_right <- true_mapping[parts[2]]
+    return(paste0(true_left, "-", true_right))
+  })
+  
+  # Also replace in chosen_image if it exists
+  if("chosen_image" %in% names(choice_trials)) {
+    choice_trials$chosen_image <- sapply(choice_trials$chosen_image, function(img) {
+      if(is.na(img)) return(NA)
+      return(true_mapping[img])
+    })
+  }
+  
+  # Map stimuli to indices (A=1, B=2, ..., F=6)
+  stim_map <- c("A"=1, "B"=2, "C"=3, "D"=4, "E"=5, "F"=6)
+  
+  # Extract left and right stimuli from pair string (format: "A-B")
+  left_stim <- sapply(choice_trials$pair, function(p) {
+    if(is.na(p) || p == "") return(NA)
+    strsplit(p, "-")[[1]][1]
+  })
+  right_stim <- sapply(choice_trials$pair, function(p) {
+    if(is.na(p) || p == "") return(NA)
+    strsplit(p, "-")[[1]][2]
+  })
+  
+  # Convert to indices
+  left_idx <- sapply(left_stim, function(s) ifelse(is.na(s), NA, stim_map[s]))
+  right_idx <- sapply(right_stim, function(s) ifelse(is.na(s), NA, stim_map[s]))
+  
+  # Determine choice (0 = left, 1 = right)
+  if("chosen_side" %in% names(choice_trials)) {
+    choice <- as.integer(choice_trials$chosen_side == "right")
+  } else if("chosen_image" %in% names(choice_trials)) {
+    choice <- as.integer(choice_trials$chosen_image == right_stim)
+  } else {
+    stop("Cannot determine choice from data")
+  }
+  
+  # Determine condition (feature or non-feature)
+  condition <- unique(choice_trials$condition)[1]
+  if(is.na(condition)) {
+    # Try to infer from file path
+    if(grepl("feature", json_file) && !grepl("non_feature", json_file)) {
+      condition <- "feature"
+    } else if(grepl("non_feature", json_file)) {
+      condition <- "non-feature"
+    } else {
+      condition <- "unknown"
+    }
+  }
+  
+  # Prepare data for Stan
+  stan_data <- list(
+    N = nrow(choice_trials),
+    K = 6,  # Six stimuli: A, B, C, D, E, F
+    left = as.integer(left_idx),
+    right = as.integer(right_idx),
+    choice = as.integer(choice),
+    reward = as.integer(choice_trials$reward),
+    is_training = as.integer(choice_trials$phase == "training")
+  )
+  
+  # Add metadata
+  attr(stan_data, "participant_info") <- list(
+    condition = condition,
+    n_training = sum(stan_data$is_training),
+    n_testing = sum(!stan_data$is_training),
+    raw_data = choice_trials,
+    filename = basename(json_file)
+  )
+  
+  return(stan_data)
+}
+
+#' Get all data files from feature and non-feature folders
+#' 
+#' @param base_dir Base directory containing feature_data and non_feature_data folders
+#' @return List with feature and non-feature file paths
+get_data_files <- function(base_dir = ".") {
+  # Define folder paths
+  feature_folder <- file.path(base_dir, "feature_data")
+  non_feature_folder <- file.path(base_dir, "non_feature_data")
+  
+  # Agent folders
+  perfect_folder <- file.path(base_dir, "agent_perfect")
+  random_folder <- file.path(base_dir, "agent_random")
+  q_folder <- file.path(base_dir, "agent_Q")
+  
+  # Check if folders exist
+  if(!dir.exists(feature_folder)) {
+    warning("Feature data folder not found: ", feature_folder)
+    feature_files <- character(0)
+  } else {
+    feature_files <- list.files(feature_folder, 
+                               pattern = "\\.json$", 
+                               full.names = TRUE)
+    cat("Found", length(feature_files), "files in feature_data folder\n")
+  }
+  
+  if(!dir.exists(non_feature_folder)) {
+    warning("Non-feature data folder not found: ", non_feature_folder)
+    non_feature_files <- character(0)
+  } else {
+    non_feature_files <- list.files(non_feature_folder, 
+                                   pattern = "\\.json$", 
+                                   full.names = TRUE)
+    cat("Found", length(non_feature_files), "files in non_feature_data folder\n")
+  }
+  
+  if(!dir.exists(perfect_folder)) {
+    warning("Perfect Agent data folder not found: ", perfect_folder)
+    perfect_files <- character(0)
+  } else {
+    perfect_files <- list.files(perfect_folder, 
+                                   pattern = "\\.json$", 
+                                   full.names = TRUE)
+    cat("Found", length(perfect_files), "files in perfect_agent folder\n")
+  }
+  
+  if(!dir.exists(random_folder)) {
+    warning("Random Agent data folder not found: ", random_folder)
+    random_files <- character(0)
+  } else {
+    random_files <- list.files(random_folder, 
+                                   pattern = "\\.json$", 
+                                   full.names = TRUE)
+    cat("Found", length(random_files), "files in random_agent folder\n")
+  }
+  
+  if(!dir.exists(q_folder)) {
+    warning("Q_Learning Agent data folder not found: ", q_folder)
+    q_files <- character(0)
+  } else {
+    q_files <- list.files(q_folder, 
+                                   pattern = "\\.json$", 
+                                   full.names = TRUE)
+    cat("Found", length(q_files), "files in Q_Learning_agent folder\n")
+  }
+  
+  return(list(
+    feature = feature_files,
+    non_feature = non_feature_files,
+    agent_perfect = perfect_files,
+    agent_random = random_files,
+    agent_Q = q_files,
+    all = c(feature_files, non_feature_files, perfect_files, random_files, q_files)
+  ))
+}
+
+# =============================================================================
+# Model Fitting Functions
+# =============================================================================
+
+#' Fit SOA model to single participant
+#' 
+#' @param json_file Path to participant's JSON file
+#' @param model_type "static", "dynamic", or path to custom Stan file
+#' @param chains Number of MCMC chains
+#' @param iter Number of iterations per chain
+#' @param warmup Number of warmup iterations
+#' @param verbose Print progress messages
+#' @return Stan fit object
+fit_soa_model <- function(json_file, 
+                         model_type = "static",
+                         chains = 4,
+                         iter = 2000,
+                         warmup = 1000,
+                         verbose = TRUE,
+                         phase = "both") {
+  
+  # Prepare data
+  if(verbose) cat("Preparing data from:", json_file, "\n")
+  stan_data <- prepare_soa_data(json_file, phase = phase)
+  
+  # Print data summary
+  if(verbose) {
+    info <- attr(stan_data, "participant_info")
+    cat("Data summary:\n")
+    cat("  Condition:", info$condition, "\n")
+    cat("  Training trials:", info$n_training, "\n")
+    cat("  Testing trials:", info$n_testing, "\n")
+    cat("  Total trials:", stan_data$N, "\n")
+  }
+  
+  # Select Stan file
+  if(model_type == "static") {
+    stan_file <- "soa_static.stan"
+  } else if(model_type == "dynamic") {
+    stan_file <- "soa_dynamic.stan"
+  } else {
+    stan_file <- model_type  # Use provided path
+  }
+  
+  # Compile model
+  if(verbose) cat("Compiling Stan model from:", stan_file, "\n")
+  stan_model <- stan_model(file = stan_file)
+  
+  # Fit model
+  if(verbose) cat("Running MCMC sampling...\n")
+  fit <- sampling(
+    stan_model,
+    data = stan_data,
+    chains = chains,
+    iter = iter,
+    warmup = warmup,
+    control = list(adapt_delta = 0.9, max_treedepth = 12),
+    refresh = ifelse(verbose, 100, 0)
+  )
+  
+  # Add data as attribute for later reference
+  attr(fit, "stan_data") <- stan_data
+  
+  return(fit)
+}
+
+# =============================================================================
+# Analysis Functions
+# =============================================================================
+
+#' Analyze choice patterns and learning curves
+#' 
+#' @param json_file Path to participant's JSON file
+#' @return List with analysis results
+analyze_choice_patterns <- function(json_file, model_fit = NULL) {
+  # Load data
+  data <- fromJSON(json_file, flatten = TRUE)
+  
+  # Extract randomized image mapping
+  rand_cols <- grep("^randomized_images\\.", names(data), value = TRUE)
+  
+  if(length(rand_cols) > 0) {
+    true_mapping <- NULL
+    
+    for(i in 1:nrow(data)) {
+      if(!is.na(data[[rand_cols[1]]][i])) {
+        true_mapping <- character()
+        
+        for(col in rand_cols) {
+          rand_label <- gsub("randomized_images\\.", "", col)
+          filename <- data[[col]][i]
+          true_letter <- gsub(".*image([A-F])\\.png.*", "\\1", filename)
+          true_mapping[rand_label] <- true_letter
+        }
+        break
+      }
+    }
+    
+    if(is.null(true_mapping)) {
+      true_mapping <- c("A"="A", "B"="B", "C"="C", "D"="D", "E"="E", "F"="F")
+    }
+  } else {
+    true_mapping <- c("A"="A", "B"="B", "C"="C", "D"="D", "E"="E", "F"="F")
+  }
+  
+  # Apply mapping to pairs and chosen_image
+  data$pair <- sapply(data$pair, function(p) {
+    if(is.na(p) || p == "") return(NA)
+    parts <- strsplit(p, "-")[[1]]
+    true_left <- true_mapping[parts[1]]
+    true_right <- true_mapping[parts[2]]
+    return(paste0(true_left, "-", true_right))
+  })
+  
+  if("chosen_image" %in% names(data)) {
+    data$chosen_image <- sapply(data$chosen_image, function(img) {
+      if(is.na(img)) return(NA)
+      return(true_mapping[img])
+    })
+  }
+  
+  choice_trials <- data[!is.na(data$pair) & data$pair != "", ]
+  
+  # Separate training and testing
+  training <- choice_trials[choice_trials$phase == "training", ]
+  testing <- choice_trials[choice_trials$phase == "testing", ]
+  
+  results <- list()
+  
+  # If model fit is provided, extract subjective ordering
+  if (!is.null(model_fit)) {
+    params <- rstan::extract(model_fit)
+    
+    # Get mean z_scores for each stimulus
+    if("z_score" %in% names(params)) {
+      z_scores <- colMeans(params$z_score)
+    } else if("z_score_final" %in% names(params)) {
+      z_scores <- colMeans(params$z_score_final)
+    } else {
+      stop("No z_score parameters found in model fit")
+    }
+    
+    # Create subjective ordering (rank from lowest to highest z_score)
+    stim_order <- order(z_scores)  # indices in order of preference
+    names(z_scores) <- LETTERS[1:6]
+    
+    # Store the subjective values
+    results$subjective_values <- z_scores
+    results$subjective_ranking <- LETTERS[stim_order]
+    
+    # Calculate consistency with subjective ordering for test phase
+    if(nrow(testing) > 0) {
+      # Extract stimuli from pairs
+      testing$left_stim <- sapply(strsplit(testing$pair, "-"), `[`, 1)
+      testing$right_stim <- sapply(strsplit(testing$pair, "-"), `[`, 2)
+      
+      # Determine which choice is consistent with subjective ordering
+      testing$consistent_choice <- ifelse(
+        z_scores[testing$right_stim] > z_scores[testing$left_stim],
+        "right", "left"
+      )
+      
+      # Check if actual choice matches consistent choice
+      if("chosen_side" %in% names(testing)) {
+        testing$is_consistent <- testing$chosen_side == testing$consistent_choice
+      } else if("chosen_image" %in% names(testing)) {
+        testing$is_consistent <- ifelse(
+          testing$consistent_choice == "right",
+          testing$chosen_image == testing$right_stim,
+          testing$chosen_image == testing$left_stim
+        )
+      }
+      
+      # Calculate consistency by stimulus pair
+      pair_consistency <- aggregate(is_consistent ~ pair, 
+                                   data = testing, 
+                                   FUN = function(x) c(mean = mean(x), n = length(x)))
+      
+      results$pair_consistency <- pair_consistency
+      
+      # Prepare data for visualization like your image
+      # Create visualization for all 15 pairs
+      all_pairs <- combn(LETTERS[1:6], 2)  # Get all combinations
+      pair_data <- data.frame(
+        pair_label = character(),
+        consistency = numeric(),
+        n_trials = integer(),
+        stringsAsFactors = FALSE
+      )
+      
+      for(i in 1:ncol(all_pairs)) {
+        stim1 <- all_pairs[1, i]
+        stim2 <- all_pairs[2, i]
+        
+        # Calculate ordering strength (difference in z-scores)
+        z_diff <- abs(z_scores[stim2] - z_scores[stim1])
+        
+        # Determine which stimulus has higher z-score
+        if(z_scores[stim2] > z_scores[stim1]) {
+          higher_stim <- stim2
+          lower_stim <- stim1
+        } else {
+          higher_stim <- stim1
+          lower_stim <- stim2
+        }
+        
+        # Find all trials with this pair (both orderings)
+        pair1 <- paste0(stim1, "-", stim2)
+        pair2 <- paste0(stim2, "-", stim1)
+        
+        # Count choices consistent with ordering
+        consistent_choices <- 0
+        total_trials <- 0
+        
+        # Check pair1 (stim1-stim2)
+        trials1 <- testing[testing$pair == pair1, ]
+        if(nrow(trials1) > 0) {
+          if("chosen_side" %in% names(trials1)) {
+            # If higher_stim is on the right, choosing right is consistent
+            if(higher_stim == stim2) {
+              consistent_choices <- consistent_choices + sum(trials1$chosen_side == "right")
+            } else {
+              consistent_choices <- consistent_choices + sum(trials1$chosen_side == "left")
+            }
+          } else if("chosen_image" %in% names(trials1)) {
+            consistent_choices <- consistent_choices + sum(trials1$chosen_image == higher_stim)
+          }
+          total_trials <- total_trials + nrow(trials1)
+        }
+        
+        # Check pair2 (stim2-stim1)
+        trials2 <- testing[testing$pair == pair2, ]
+        if(nrow(trials2) > 0) {
+          if("chosen_side" %in% names(trials2)) {
+            # If higher_stim is on the right, choosing right is consistent
+            if(higher_stim == stim1) {
+              consistent_choices <- consistent_choices + sum(trials2$chosen_side == "right")
+            } else {
+              consistent_choices <- consistent_choices + sum(trials2$chosen_side == "left")
+            }
+          } else if("chosen_image" %in% names(trials2)) {
+            consistent_choices <- consistent_choices + sum(trials2$chosen_image == higher_stim)
+          }
+          total_trials <- total_trials + nrow(trials2)
+        }
+        
+        # Calculate consistency proportion
+        if(total_trials > 0) {
+          consistency_prop <- consistent_choices / total_trials
+        } else {
+          consistency_prop <- NA
+        }
+        
+        # Create label with ordering strength
+        pair_label <- paste0(stim1, stim2, "(", sprintf("%.2f", z_diff), ")")
+        
+        # Add to dataframe
+        pair_data <- rbind(pair_data, data.frame(
+          pair_label = pair_label,
+          consistency = consistency_prop,
+          n_trials = total_trials,
+          z_diff = z_diff,
+          stringsAsFactors = FALSE
+        ))
+      }
+      
+      # Sort by z_diff for better visualization
+      pair_data <- pair_data[order(pair_data$z_diff), ]
+      pair_data$pair_label <- factor(pair_data$pair_label, levels = pair_data$pair_label)
+      
+      results$pair_consistency_data <- pair_data
+
+      # Calculate correlation between z_diff and consistency
+      cor_text <- ""
+      
+      if(sum(!is.na(pair_data$consistency)) > 2) {
+        cor_test <- cor.test(pair_data$z_diff[!is.na(pair_data$consistency)], 
+                             pair_data$consistency[!is.na(pair_data$consistency)])
+        # Format correlation text for plot
+        cor_text <- paste0("r = ", sprintf("%.3f", cor_test$estimate), 
+                          "\np = ", sprintf("%.4f", cor_test$p.value))
+        cat("\n  Correlation between ordering strength and consistency:\n")
+        cat("    r =", round(cor_test$estimate, 3), 
+            ", p =", round(cor_test$p.value, 4), "\n")
+        
+        results$consistency_correlation <- cor_test
+      }
+      
+      # Create the plot
+      p <- ggplot(pair_data[!is.na(pair_data$consistency), ], 
+                  aes(x = pair_label, y = consistency)) +
+        geom_point(size = 4, aes(color = z_diff)) +
+        geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.5) +
+        scale_color_gradient(low = "blue", high = "red", 
+                           name = "Ordering\nStrength") +
+        scale_y_continuous(limits = c(0, 1), 
+                          breaks = c(0, 0.25, 0.5, 0.75, 1.0)) +
+        labs(title = "Choice Consistency with Subjective Ordering",
+             x = "Stimulus Pair (ordering strength)",
+             y = "Proportion Choosing According to\nSubjective Ordering") +
+        theme_minimal() +
+        theme(plot.title = element_text(size = 16, face = "bold"),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 9)) +
+        annotate("text", 
+                x = Inf, 
+                y = 0.95,  # Near top
+                label = cor_text,
+                hjust = 1.1,  # Right align with small margin
+                vjust = 1,    # Top align
+                color = "gray40",  # Gray color
+                size = 4,     # Text size
+                fontface = "italic")  # Italic for style
+      
+      print(p)
+      results$consistency_plot <- p
+      
+      consistency_record <- data.frame(
+        consistency = pair_data$consistency,
+        z_diff = pair_data$z_diff
+      )
+      
+      # Remove any NA rows if they exist
+      consistency_record <- consistency_record[!is.na(consistency_record$consistency), ]
+      
+      # Store in results
+      results$consistency_record <- consistency_record
+      
+      # Print summary for verification
+      cat("\n  Consistency record created with", nrow(consistency_record), "pairs\n")
+      
+      # Sort z_scores to get rankings (rank 1 = highest z-score)
+      sorted_indices <- order(z_scores, decreasing = TRUE)
+      sorted_z_scores <- z_scores[sorted_indices]
+      
+      # Create linear record: rank vs z-score
+      linear_record <- data.frame(
+        rank = 1:6,
+        z_score = as.numeric(sorted_z_scores)
+      )
+      
+      # Run linear regression: z_score ~ rank
+      lm_model <- lm(z_score ~ rank, data = linear_record)
+      slope <- coef(lm_model)[2]  # Extract slope coefficient
+      
+      # Store in results
+      results$linear_record <- linear_record
+      results$slope <- slope
+      
+      # Optional: Print summary
+      cat("  Linear regression slope:", round(slope, 4), "\n")
+      cat("  R-squared:", round(summary(lm_model)$r.squared, 4), "\n")
+      
+    }
+    else {
+      # No testing data available
+      cat("  Warning: No testing phase data found for consistency analysis\n")
+      results$pair_consistency_data <- data.frame(
+        pair_label = character(),
+        consistency = numeric(),
+        n_trials = integer(),
+        z_diff = numeric()
+      )
+    }
+  }
+  
+    return(results)
+}
+
+# =============================================================================
+# Visualization Functions
+# =============================================================================
+
+#' Extract and visualize results
+#' 
+#' @param fit Stan fit object
+#' @param participant_name Optional participant identifier
+#' @param plot Whether to create plots
+#' @return List with extracted results
+visualize_soa_results <- function(fit, participant_name = NULL, plot = TRUE) {
+  # Extract parameters
+  params <- rstan::extract(fit)
+  
+  # Get the data used for fitting
+  stan_data <- attr(fit, "stan_data")
+  
+  # Determine which parameters are available
+  if("z_score" %in% names(params)) {
+    z_scores <- colMeans(params$z_score)
+    sigmas <- colMeans(params$sigma)
+    param_type <- "static"
+  } else if("z_score_final" %in% names(params)) {
+    z_scores <- colMeans(params$z_score_final)
+    sigmas <- colMeans(params$sigma_final)
+    param_type <- "dynamic"
+  } else {
+    stop("No position parameters found in model")
+  }
+  
+  # Create data frame for results
+  stim_data <- data.frame(
+    stimulus = LETTERS[1:6],
+    position = z_scores,
+    uncertainty = sigmas,
+    lower = z_scores - sigmas,
+    upper = z_scores + sigmas
+  )
+  
+  if(plot) {
+    # Plot 1: Positions with uncertainty
+    p1 <- ggplot(stim_data, aes(x = stimulus, y = position)) +
+      geom_point(size = 4) +
+      geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2, size = 1) +
+      labs(title = paste("Subjective Ordering Analysis",
+                        ifelse(is.null(participant_name), "", 
+                              paste("-", participant_name))),
+           x = "Stimulus",
+           y = "Subjective Position (Z-score)") +
+      theme_minimal(base_size = 14) +
+      geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+      theme(plot.title = element_text(size = 16, face = "bold"),
+            plot.margin = margin(20, 20, 20, 20))  # Add margins
+    
+    # Print first plot
+    print(p1)
+    
+    # Plot 2: Density distributions for each stimulus
+    # Extract full posterior samples
+    z_samples <- params$z_score  # Should be iterations x 6 matrix
+    
+    # Convert to long format for ggplot
+    density_df <- data.frame()
+    for(k in 1:6) {
+      density_df <- rbind(density_df, data.frame(
+        stimulus = LETTERS[k],
+        position = z_samples[, k]
+      ))
+    }
+    
+    # Define colors for each stimulus
+    stim_colors <- c("A" = "#000000",  # black
+                     "B" = "#8B008B",  # purple  
+                     "C" = "#0000FF",  # blue
+                     "D" = "#00CED1",  # cyan
+                     "E" = "#00FF00",  # green
+                     "F" = "#FFA500")  # orange
+    
+    p2 <- ggplot(density_df, aes(x = position, fill = stimulus, color = stimulus)) +
+      geom_density(alpha = 0.3, size = 1.2, adjust = 1.5) +
+      scale_fill_manual(values = stim_colors) +
+      scale_color_manual(values = stim_colors) +
+      labs(title = "Posterior Distributions of Subjective Positions",
+           x = "Subjective Position (Z-score)",
+           y = "Density",
+           fill = "Stimulus",
+           color = "Stimulus") +
+      theme_minimal(base_size = 14) +
+      geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+      theme(plot.title = element_text(size = 16, face = "bold"),
+            legend.position = "right",
+            plot.margin = margin(20, 20, 20, 20))
+    
+    # Print second plot
+    print(p2)
+  }
+  
+  # Extract summary statistics
+  summary_stats <- summary(fit, 
+                           pars = c("z_score", "sigma", 
+                                   "theta", "ordering_strength"))$summary
+  
+  # Print summary
+  cat("\n", rep("=", 50), "\n", sep="")
+  cat("Parameter Summary for", 
+      ifelse(is.null(participant_name), "Participant", participant_name), "\n")
+  cat(rep("=", 50), "\n", sep="")
+  print(round(summary_stats[,c("mean", "sd", "25%", "50%", "75%", "n_eff", "Rhat")], 3))
+  
+  return(list(
+    pos_plot = p1,
+    den_plot = p2,
+    res = list( 
+      positions = stim_data,
+      summary = summary_stats
+      )
+    )
+  )
+}
+
+#' Plot learning trajectories for dynamic model
+#' 
+#' @param fit Stan fit object from dynamic model
+#' @param trials_to_plot Which trials to show (default: all)
+
+plot_dynamic_trajectories <- function(fit, show_training_end = TRUE, smooth_span = 0.15) {
+  params <- rstan::extract(fit)
+  
+  if(!"z_score_trajectory" %in% names(params)) {
+    stop("This function requires a dynamic model fit")
+  }
+  
+  # Get trajectories and data
+  z_traj <- params$z_score_trajectory
+  stan_data <- attr(fit, "stan_data")
+  n_trials <- dim(z_traj)[2] - 1
+  n_training <- sum(stan_data$is_training)
+  
+  # Calculate mean trajectories only
+  mean_traj <- apply(z_traj, c(2,3), mean)
+  
+  # Reshape for plotting
+  traj_df <- data.frame()
+  for(k in 1:6) {
+    for(t in 0:n_trials) {
+      traj_df <- rbind(traj_df, data.frame(
+        trial = t,
+        stimulus = LETTERS[k],
+        position = mean_traj[t+1, k]
+      ))
+    }
+  }
+  
+  # Define colors
+  stim_colors <- c("A" = "#000000", "B" = "#8B008B", 
+                   "C" = "#0000FF", "D" = "#00CED1",
+                   "E" = "#00FF00", "F" = "#FFA500")
+  
+  # Create plot with smoothed lines
+  p <- ggplot(traj_df, aes(x = trial, y = position, color = stimulus)) +
+    geom_smooth(method = "loess", span = smooth_span, se = FALSE, size = 1.2) +
+    scale_color_manual(values = stim_colors) +
+    labs(title = "Learning Trajectories: Development of Subjective Ordering",
+         x = "Trial Number",
+         y = "Subjective Position (Z-score)",
+         color = "Stimulus") +
+    theme_minimal(base_size = 14) +
+    theme(plot.title = element_text(size = 16, face = "bold"),
+          legend.position = "right")
+  
+  # Add training/test phase separator
+  if(show_training_end && n_training > 0) {
+    p <- p + 
+      geom_vline(xintercept = n_training, linetype = "dashed", alpha = 0.5) +
+      annotate("text", x = n_training, y = min(traj_df$position), 
+               label = "Test phase →", hjust = -0.1, vjust = -0.5, size = 3)
+  }
+  
+  return(p)
+}
+
+plot_dynamic_trajectories_ranked <- function(fit, show_training_end = TRUE, smooth_span = 0.1) {
+  params <- rstan::extract(fit)
+  
+  if(!"z_score_trajectory" %in% names(params)) {
+    stop("This function requires a dynamic model fit")
+  }
+  
+  # Get trajectories and data
+  z_traj <- params$z_score_trajectory
+  stan_data <- attr(fit, "stan_data")
+  n_trials <- dim(z_traj)[2] - 1
+  n_training <- sum(stan_data$is_training)
+  
+  # Calculate mean trajectories
+  mean_traj <- apply(z_traj, c(2,3), mean)
+  
+  # Get final positions to determine ranking
+  final_positions <- mean_traj[n_trials + 1, ]
+  rank_order <- order(final_positions, decreasing = TRUE)
+  
+  # Create rank labels
+  rank_labels <- paste0(c("1st", "2nd", "3rd", "4th", "5th", "6th"))
+  
+  # Reshape for plotting with rank labels
+  traj_df <- data.frame()
+  for(k in 1:6) {
+    stim_idx <- k
+    # Find what rank this stimulus ended up as
+    final_rank <- which(rank_order == stim_idx)
+    
+    for(t in 0:n_trials) {
+      traj_df <- rbind(traj_df, data.frame(
+        trial = t,
+        stimulus = rank_labels[final_rank],  # Use rank label instead of letter
+        position = mean_traj[t+1, stim_idx],
+        stim_original = LETTERS[stim_idx]  # Keep original for color mapping
+      ))
+    }
+  }
+  
+  # Define colors (same as original)
+  stim_colors <- c("A" = "#000000", "B" = "#8B008B", 
+                   "C" = "#0000FF", "D" = "#00CED1",
+                   "E" = "#00FF00", "F" = "#FFA500")
+  
+  # Map colors to ranks based on which stimulus has which rank
+  rank_colors <- character(6)
+  for(i in 1:6) {
+    original_stim <- LETTERS[rank_order[i]]
+    rank_colors[i] <- stim_colors[original_stim]
+  }
+  names(rank_colors) <- rank_labels
+  
+  # Create plot with rank labels
+  p <- ggplot(traj_df, aes(x = trial, y = position, color = stimulus)) +
+    geom_smooth(method = "loess", span = smooth_span, se = FALSE, size = 1.2) +
+    scale_color_manual(values = rank_colors) +
+    labs(title = "Learning Trajectories: Development of Subjective Ordering (Ranked)",
+         subtitle = "Lines labeled by final ranking (1st = highest final position)",
+         x = "Trial Number",
+         y = "Subjective Position (Z-score)",
+         color = "Final Rank") +
+    theme_minimal(base_size = 14) +
+    theme(plot.title = element_text(size = 16, face = "bold"),
+          legend.position = "right")
+  
+  # Add training/test phase separator
+  if(show_training_end && n_training > 0) {
+    p <- p + 
+      geom_vline(xintercept = n_training, linetype = "dashed", alpha = 0.5) +
+      annotate("text", x = n_training, y = min(traj_df$position), 
+               label = "Test phase →", hjust = -0.1, vjust = -0.5, size = 3)
+  }
+  
+  return(p)
+}
+
+#' Compare multiple model fits
+#' 
+#' @param fits List of Stan fit objects
+#' @param model_names Names for each model
+#' @return Comparison table
+# compare_models <- function(fits, model_names = NULL) {
+#   if(is.null(model_names)) {
+#     model_names <- paste("Model", 1:length(fits))
+#   }
+#   
+#   comparison <- data.frame(
+#     Model = model_names,
+#     WAIC = numeric(length(fits)),
+#     LOOIC = numeric(length(fits)),
+#     Mean_Deviance = numeric(length(fits))
+#   )
+#   
+#   for(i in 1:length(fits)) {
+#     # Extract log likelihood
+#     log_lik <- rstan::extract(fits[[i]], "log_lik")$log_lik
+#     
+#     # Calculate WAIC
+#     waic <- loo::waic(log_lik)
+#     comparison$WAIC[i] <- waic$estimates["waic", "Estimate"]
+#     
+#     # Calculate LOO-CV
+#     loo_result <- loo::loo(log_lik)
+#     comparison$LOOIC[i] <- loo_result$estimates["looic", "Estimate"]
+#     
+#     # Mean deviance
+#     comparison$Mean_Deviance[i] <- -2 * mean(rowSums(log_lik))
+#   }
+#   
+#   # Add difference from best model
+#   comparison$dWAIC <- comparison$WAIC - min(comparison$WAIC)
+#   comparison$dLOOIC <- comparison$LOOIC - min(comparison$LOOIC)
+#   
+#   return(comparison[order(comparison$WAIC), ])
+# }
+
+# =============================================================================
+# Main Analysis Pipeline
+# =============================================================================
+
+#' Run complete SOA analysis pipeline
+#' 
+#' @param json_file Path to data file
+#' @param participant_id Participant identifier
+#' @param model_types Vector of model types to fit ("static", "dynamic")
+#' @param save_results Whether to save results to file
+#' @return List with all results
+run_soa_analysis <- function(json_file, 
+                             participant_id = NULL,
+                             model_types = c("static"),
+                             save_results = TRUE,
+                             phase = "both") {
+  
+  cat("\n", rep("=", 60), "\n", sep="")
+  cat("SUBJECTIVE ORDERING ANALYSIS\n")
+  cat(rep("=", 60), "\n", sep="")
+  
+  results <- list()
+  
+  # Step 1: Fit models
+
+  for(model_type in model_types) {
+    cat("\n1. Fitting", model_type, "model...\n")
+    
+    fit <- fit_soa_model(json_file, 
+                        model_type = model_type,
+                        chains = 4, 
+                        iter = 2000, 
+                        warmup = 1000,
+                        verbose = FALSE,
+                        phase = phase)
+    
+    # Check convergence
+    cat("  Checking convergence...\n")
+    rhats <- summary(fit)$summary[,"Rhat"]
+    if(any(rhats > 1.1, na.rm = TRUE)) {
+      warning("Some Rhat values > 1.1. Consider running more iterations.")
+    } else {
+      cat("  Convergence looks good (all Rhat < 1.1)\n")
+    }
+    
+    # Step 2: Analyze choice patterns
+    if(model_type == "static") {
+      cat("\n2. Analyzing choice patterns...\n")
+      patterns <- analyze_choice_patterns(json_file, model_fit = fit)
+      results$patterns <- patterns
+      
+      cat("\n3. Extracting static results...\n")
+      model_results <- visualize_soa_results(fit, participant_id, plot = TRUE)
+      
+      results$position_plot <- model_results$pos_plot
+      results$density_plot <- model_results$den_plot
+      results[[paste0(model_type, "_results")]] <- model_results$res
+      
+    } else if(model_type == "dynamic") {
+      cat("\n2. Plotting learning trajectories...\n")
+      
+      traj_plot <- plot_dynamic_trajectories(fit)
+      print(traj_plot)
+      results$trajectory_plot <- traj_plot
+      
+      traj_plot_ranked <- plot_dynamic_trajectories_ranked(fit)
+      print(traj_plot_ranked)
+      results$trajectory_plot_ranked <- traj_plot_ranked
+      
+      # Extract final positions for summary
+      params <- rstan::extract(fit)
+      final_positions <- colMeans(params$z_score_final)
+      names(final_positions) <- LETTERS[1:6]
+      
+      cat("\n3. Final learned positions:\n")
+      print(round(final_positions, 3))
+      
+      results$dynamic_final_positions <- final_positions
+      results$dynamic_learning_params <- list(
+        alpha_pos = mean(params$alpha_pos),
+        alpha_neg = mean(params$alpha_neg),
+        sigma_decay = mean(params$sigma_decay)
+      )
+    }
+    
+    results[[paste0(model_type, "_fit")]] <- fit
+   }
+  
+  
+
+  
+  # # Step 3: Compare models if multiple were fit
+  # if(length(model_types) > 1) {
+  #   cat("\n4. Comparing models...\n")
+  #   fits_list <- lapply(model_types, function(m) results[[paste0(m, "_fit")]])
+  #   comparison <- compare_models(fits_list, model_types)
+  #   print(comparison)
+  #   results$model_comparison <- comparison
+  # }
+  
+  # Step 3: Save results
+  if(save_results) {
+    output_file <- paste0("soa_results_", 
+                         ifelse(is.null(participant_id), "participant", participant_id),
+                         "_", format(Sys.Date(), "%Y%m%d"), ".RData")
+    save(results, file = output_file)
+    cat("\nResults saved to:", output_file, "\n")
+  }
+  
+  return(results)
+}
+
+# =============================================================================
+# Batch Analysis Functions
+# =============================================================================
+
+#' Batch analysis for multiple participants
+#' 
+#' @param json_files Vector of JSON file paths OR NULL to auto-detect
+#' @param run_hierarchical Whether to run hierarchical model
+#' @param by_condition Whether to analyze conditions separately
+#' @return List with all participant results
+batch_analysis <- function(json_files = NULL,
+                           condition = "all",
+                          run_hierarchical = FALSE,
+                          by_condition = TRUE,
+                          phase = "both") {
+  
+  # Auto-detect files if not provided
+  if(is.null(json_files)) {
+    cat("\nAuto-detecting data files...\n")
+    files <- get_data_files()
+    
+    if(by_condition) {
+      # Analyze conditions separately
+      results <- list()
+      
+      # Feature condition
+      if(length(files$feature) > 0) {
+        cat("\n", rep("=", 60), "\n", sep="")
+        cat("ANALYZING FEATURE CONDITION\n")
+        cat(rep("=", 60), "\n")
+        results$feature <- batch_analysis_helper(files$feature, 
+                                                 run_hierarchical, 
+                                                 "feature",
+                                                 phase = phase)
+      }
+      
+      # Non-feature condition
+      if(length(files$`non-feature`) > 0) {
+        cat("\n", rep("=", 60), "\n", sep="")
+        cat("ANALYZING NON-FEATURE CONDITION\n")
+        cat(rep("=", 60), "\n")
+        results$non_feature <- batch_analysis_helper(files$`non-feature`, 
+                                                     run_hierarchical, 
+                                                     "non-feature",
+                                                     phase = phase)
+      }
+      
+      # Compare conditions if both exist
+      if(length(files$feature) > 0 && length(files$`non-feature`) > 0) {
+        cat("\n", rep("=", 60), "\n", sep="")
+        cat("COMPARING CONDITIONS\n")
+        cat(rep("=", 60), "\n")
+        results$comparison <- compare_conditions(results$feature, 
+                                                results$non_feature)
+      }
+      
+      return(results)
+      
+    } else {
+      # Analyze all together
+      json_files <- files$all
+    }
+  }
+
+  return(batch_analysis_helper(json_files, run_hierarchical, condition, phase))
+}
+
+#' Helper function for batch analysis
+#' 
+#' @param json_files Vector of JSON file paths
+#' @param run_hierarchical Whether to run hierarchical model
+#' @param condition_name Name of condition being analyzed
+#' @return List with participant results
+batch_analysis_helper <- function(json_files, run_hierarchical, condition_name, phase = "both") {
+  
+  cat("\nBatch Analysis for", length(json_files), "participants\n")
+  cat("Condition:", condition_name, "\n")
+  cat(rep("=", 60), "\n")
+  
+  # Individual analyses
+  individual_results <- list()
+  
+  for(i in seq_along(json_files)) {
+    cat("\nParticipant", i, "of", length(json_files), "\n")
+    
+    # Generate participant ID based on agent type from file path
+    file_path <- json_files[i]
+    
+    # Determine agent type from folder name
+    if(grepl("agent_perfect", file_path)) {
+      participant_id <- paste0("P", sprintf("%03d", i))
+    } else if(grepl("agent_random", file_path)) {
+      participant_id <- paste0("R", sprintf("%03d", i))
+    } else if(grepl("agent_Q", file_path)) {
+      participant_id <- paste0("Q", sprintf("%03d", i))
+    } else if(grepl("feature", file_path)) {
+      participant_id <- paste0("F", sprintf("%03d", i))
+    } else if(grepl("non_feature", file_path)) {
+      participant_id <- paste0("N", sprintf("%03d", i))
+    } else {
+      # Default fallback using condition_name
+      participant_id <- paste0(toupper(substr(condition_name, 1, 1)), 
+                             sprintf("%03d", i))
+    }
+    
+    results <- run_soa_analysis(json_files[i], 
+                               participant_id = participant_id,
+                               model_types = "static",
+                               # model_types = c("static","dynamic"),
+                               save_results = FALSE,
+                               phase = phase)
+    
+    individual_results[[participant_id]] <- results
+  }
+  
+  # Summary statistics
+  individual_results$summary <- summarize_results(individual_results)
+  
+  # Save results
+  save(individual_results, 
+       file = paste0("batch_results_", condition_name, "_",
+                    format(Sys.Date(), "%Y%m%d"), ".RData"))
+  
+  return(individual_results)
+}
+
+#' Compare results between feature and non-feature conditions
+#' 
+#' @param feature_results Results from feature condition
+#' @param non_feature_results Results from non-feature condition
+#' @return Comparison statistics
+compare_conditions <- function(feature_results, non_feature_results) {
+  
+  comparison <- list()
+  
+  # Extract ordering strengths
+  get_ordering_strengths <- function(results) {
+    strengths <- sapply(results, function(r) {
+      if("static_results" %in% names(r)) {
+        return(r$static_results$ordering_strength)
+      }
+      return(NA)
+    })
+    strengths[!is.na(strengths)]
+  }
+  
+  feature_strengths <- get_ordering_strengths(feature_results)
+  non_feature_strengths <- get_ordering_strengths(non_feature_results)
+  
+  # Statistical comparison
+  if(length(feature_strengths) > 0 && length(non_feature_strengths) > 0) {
+    # T-test for ordering strength
+    t_test <- t.test(feature_strengths, non_feature_strengths)
+    comparison$ordering_strength_test <- t_test
+    
+    cat("\nOrdering Strength Comparison:\n")
+    cat("  Feature mean:", round(mean(feature_strengths), 3), "\n")
+    cat("  Non-feature mean:", round(mean(non_feature_strengths), 3), "\n")
+    cat("  t =", round(t_test$statistic, 3), 
+        ", p =", round(t_test$p.value, 4), "\n")
+  }
+  
+  return(comparison)
+}
+
+#' Summarize results across participants
+#' 
+#' @param results List of individual results
+#' @return Summary statistics
+summarize_results <- function(results) {
+  
+  # Remove non-participant entries
+  participant_results <- results[!names(results) %in% c("hierarchical", "summary", "group_summary")]
+  
+  if(length(participant_results) == 0) return(NULL)
+  
+  # Extract key metrics from each participant
+  metrics_list <- list()
+  
+  for(p in names(participant_results)) {
+    r <- participant_results[[p]]
+    
+    # Extract consistency correlation if available
+    correlation_r <- NA
+    correlation_p <- NA
+    if("patterns" %in% names(r) && "consistency_correlation" %in% names(r$patterns)) {
+      correlation_r <- r$patterns$consistency_correlation$estimate
+      correlation_p <- r$patterns$consistency_correlation$p.value
+    }
+    
+    # Extract mean consistency across all pairs if available
+    mean_consistency <- NA
+    if("patterns" %in% names(r) && "pair_consistency_data" %in% names(r$patterns)) {
+      mean_consistency <- mean(r$patterns$pair_consistency_data$consistency, na.rm = TRUE)
+    }
+    
+    # Extract z-score spread (as a measure of ordering strength)
+    z_score_spread <- NA
+    if("static_results" %in% names(r) && "positions" %in% names(r$static_results)) {
+      positions <- r$static_results$positions$position
+      z_score_spread <- max(positions) - min(positions)
+    }
+    
+    # Extract theta if available
+    theta <- NA
+    if("static_results" %in% names(r) && "summary" %in% names(r$static_results)) {
+      summary_table <- r$static_results$summary
+      theta_row <- grep("theta", rownames(summary_table))
+      
+      if(length(theta_row) > 0) theta <- summary_table[theta_row[1], "mean"]
+    }
+    
+    metrics_list[[p]] <- data.frame(
+      participant = p,
+      z_score_spread = z_score_spread,
+      mean_consistency = mean_consistency,
+      correlation_r = correlation_r,
+      correlation_p = correlation_p,
+      theta = theta,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Combine all metrics
+  metrics <- do.call(rbind, metrics_list)
+  
+  # Calculate summary statistics
+  summary <- list(
+    n_participants = nrow(metrics),
+    z_score_spread = c(
+      mean = mean(metrics$z_score_spread, na.rm = TRUE),
+      sd = sd(metrics$z_score_spread, na.rm = TRUE),
+      median = median(metrics$z_score_spread, na.rm = TRUE),
+      min = min(metrics$z_score_spread, na.rm = TRUE),
+      max = max(metrics$z_score_spread, na.rm = TRUE)
+    ),
+    consistency = c(
+      mean = mean(metrics$mean_consistency, na.rm = TRUE),
+      sd = sd(metrics$mean_consistency, na.rm = TRUE)
+    ),
+    correlation = c(
+      mean_r = mean(metrics$correlation_r, na.rm = TRUE),
+      significant = sum(metrics$correlation_p < 0.05, na.rm = TRUE)
+    ),
+    theta = c(
+      mean = mean(metrics$theta, na.rm = TRUE),
+      sd = sd(metrics$theta, na.rm = TRUE)
+    ),
+    raw_metrics = metrics
+  )
+  
+  # Print summary
+  cat("\n", rep("-", 50), "\n", sep="")
+  cat("Summary Statistics (", summary$n_participants, " participants)\n", sep="")
+  cat(rep("-", 50), "\n", sep="")
+  
+  cat("\nSubjective Ordering Metrics:\n")
+  cat("  Z-score spread (max - min position):\n")
+  cat("    Mean (SD):", sprintf("%.3f (%.3f)", 
+                                summary$z_score_spread["mean"], 
+                                summary$z_score_spread["sd"]), "\n")
+  cat("    Range:", sprintf("%.3f - %.3f", 
+                            summary$z_score_spread["min"], 
+                            summary$z_score_spread["max"]), "\n")
+  
+  cat("\nChoice Consistency:\n")
+  cat("  Mean consistency across pairs:", 
+      sprintf("%.3f (%.3f)", summary$consistency["mean"], 
+              summary$consistency["sd"]), "\n")
+  cat("  Correlation (ordering strength vs consistency):\n")
+  cat("    Mean r:", sprintf("%.3f", summary$correlation["mean_r"]), "\n")
+  cat("    Significant (p < 0.05):", summary$correlation["significant"], 
+      "out of", sum(!is.na(metrics$correlation_p)), "participants\n")
+  
+  cat("\nModel Parameters:\n")
+  cat("  theta:", sprintf("%.3f (%.3f)", 
+                              summary$theta["mean"], 
+                              summary$theta["sd"]), "\n")
+  
+  return(summary)
+}
+```
+
+
+
+```{r}
+# Get file lists
+files <- get_data_files()
+
+# Analyze all data
+# all_results <- batch_analysis(run_hierarchical = FALSE)
+
+# Analyze only feature condition
+feature_results <- batch_analysis(files$feature, "feature", phase = "test")
+
+# Analyze only non-feature condition
+non_feature_results <- batch_analysis(files$non_feature, "non-feature", phase = "test")
+```
+
+
+```{r}
+# Get file lists
+files <- get_data_files()
+
+# Analyze
+random_results <- batch_analysis(files$agent_random, "random", phase = "test")
+
+perfect_results <- batch_analysis(files$agent_perfect, "perfect", phase = "test")
+
+Q_results <- batch_analysis(files$agent_Q, "Q_Learning", phase = "test")
+```
+
+
+
+```{r}
+results_perfect <- run_soa_analysis(
+  "agent_perfect/perfect_agent_001.json",
+  participant_id = "P001",
+#  model_types = c("static","dynamic")
+)
+```
+
+
+```{r}
+results_f <- run_soa_analysis(
+  "feature_data/data_feature_2025-08-12T14-31-17.json",
+#  "pilot_data/data_feature_2025-08-02T19-05-43.json",
+  participant_id = "F001",
+#  model_types = c("static","dynamic")
+)
+```
+
+
+
+```{r}
+# clear complied stan model
+if (dir.exists("~/.rstan")) {
+  unlink("~/.rstan", recursive = TRUE)
+}
+```

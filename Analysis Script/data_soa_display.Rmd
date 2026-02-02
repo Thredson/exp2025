@@ -1,0 +1,2601 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(rstan)
+library(dplyr)
+library(jsonlite)
+library(tidyverse)
+library(gridExtra)
+library(bayesplot)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+```
+
+
+```{r}
+# Load the RData file
+load("soa_results_F001_20250822.RData") 
+
+# View the structure
+str(results, max.level = 2)  # Shows structure up to 2 levels deep
+
+# Access specific components
+results$patterns$consistency_correlation  # View correlation stats
+results$static_results$positions         # View position estimates
+results$patterns$pair_consistency_data   # View consistency by pair
+
+# View plots that were saved
+results$position_plot  # Display position plot
+results$density_plot   # Display density plot
+results$patterns$consistency_plot  # Display consistency plot
+results$trajectory_plot # Display trajectory_plot
+```
+
+
+```{r}
+# Load batch results
+load("batch_results_feature_20250826.RData")
+
+# store separately
+feature_results <- individual_results
+rm(individual_results)
+
+# View summary across all participants
+feature_results$summary
+
+# Access specific participant
+feature_results$F001$patterns$consistency_correlation
+
+# Loop through all participants to extract metrics
+for(p in names(feature_results)) {
+  if(p != "summary") {  # Skip the summary entry
+    cat("\nParticipant:", p, "\n")
+    cat("Z-score spread:",
+        feature_results[[p]]$static_results$positions$position %>%
+        {max(.) - min(.)}, "\n")
+  }
+}
+
+
+```
+
+```{r}
+# t test of slope
+
+# Extract slopes from Human data
+slopes_f <- numeric(44)
+slopes_nf <- numeric(43)
+slopes_r <- numeric(44)
+slopes_q <- numeric(44)
+
+num <- 0
+
+# Feature group
+for(p_id in names(feature_results)[!names(feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(feature_results[[p_id]]) &&
+     "slope" %in% names(feature_results[[p_id]]$patterns)) {
+    
+      slope = unname(feature_results[[p_id]]$patterns$slope)
+      slopes_f[num] = slope
+      
+      num = num + 1
+  }
+}
+
+num <- 0
+
+# Non_feature group
+for(p_id in names(non_feature_results)[!names(non_feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(non_feature_results[[p_id]]) &&
+     "slope" %in% names(non_feature_results[[p_id]]$patterns)) {
+    
+      slope = unname(non_feature_results[[p_id]]$patterns$slope)
+      slopes_nf[num] = slope
+      
+      num = num + 1
+  }
+}
+
+num <- 0
+
+# Random group
+for(p_id in names(random_results)[!names(random_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(random_results[[p_id]]) &&
+     "slope" %in% names(random_results[[p_id]]$patterns)) {
+    
+      slope = unname(random_results[[p_id]]$patterns$slope)
+      slopes_r[num] = slope
+      
+      num = num + 1
+  }
+}
+
+num <- 0
+
+# Q_Learning group
+for(p_id in names(Q_results)[!names(Q_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(Q_results[[p_id]]) &&
+     "slope" %in% names(Q_results[[p_id]]$patterns)) {
+    
+      slope = unname(Q_results[[p_id]]$patterns$slope)
+      slopes_q[num] = slope
+      
+      num = num + 1
+  }
+}
+
+
+
+# Feature vs 0
+cat("\n1. Feature vs 0:\n")
+t_test_f <- t.test(slopes_f)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_f$parameter, t_test_f$statistic, t_test_f$p.value))
+# cat(sprintf("   Mean difference = %.4f\n", 
+#             mean(random_z_spreads) - mean(feature_z_spreads)))
+if(t_test_f$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Non_feature vs 0
+cat("\n1. Non_feature vs 0:\n")
+t_test_nf <- t.test(slopes_nf)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_nf$parameter, t_test_nf$statistic, t_test_nf$p.value))
+# cat(sprintf("   Mean difference = %.4f\n", 
+#             mean(random_z_spreads) - mean(feature_z_spreads)))
+if(t_test_nf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Feature vs Random
+cat("\n1. Feature vs Random:\n")
+t_test_rf <- t.test(slopes_f, mu = mean(slopes_r))
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rf$parameter, t_test_rf$statistic, t_test_rf$p.value))
+# cat(sprintf("   Mean difference = %.4f\n",
+#             mean(slopes_r) - mean(slopes_f)))
+if(t_test_rf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Non_feature vs Random
+cat("\n1. Non_feature vs Random:\n")
+t_test_rnf <- t.test(slopes_nf, mu = mean(slopes_r))
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rnf$parameter, t_test_rnf$statistic, t_test_rnf$p.value))
+# cat(sprintf("   Mean difference = %.4f\n",
+#             mean(slopes_r) - mean(slopes_nf)))
+if(t_test_rnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Feature vs Q_Learning
+cat("\n1. Feature vs Q_Learning:\n")
+t_test_qf <- t.test(slopes_f, mu = mean(slopes_q))
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qf$parameter, t_test_qf$statistic, t_test_qf$p.value))
+# cat(sprintf("   Mean difference = %.4f\n",
+#             mean(slopes_q) - mean(slopes_f)))
+if(t_test_qf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Non_feature vs Q_Learning
+cat("\n1. Non_feature vs Q_Learning:\n")
+t_test_qnf <- t.test(slopes_nf, mu = mean(slopes_q))
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qnf$parameter, t_test_qnf$statistic, t_test_qnf$p.value))
+# cat(sprintf("   Mean difference = %.4f\n",
+#             mean(slopes_q) - mean(slopes_nf)))
+if(t_test_qnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+```
+
+
+```{r}
+# t test between z-score spread of conditions and agents
+
+cat("\n", rep("=", 60), "\n")
+cat("Z-SCORE SPREAD COMPARISONS (Using Individual Data)\n")
+cat(rep("=", 60), "\n")
+
+# Extract individual z_score_spread values from raw_metrics
+feature_z_spreads <- feature_results$summary$raw_metrics$z_score_spread
+non_feature_z_spreads <- non_feature_results$summary$raw_metrics$z_score_spread
+random_z_spreads <- random_results$summary$raw_metrics$z_score_spread
+Q_z_spreads <- Q_optimized_results$summary$raw_metrics$z_score_spread
+
+# Calculate summary statistics
+cat("\nGROUP SUMMARY STATISTICS:\n")
+cat(rep("-", 40), "\n")
+cat(sprintf("Random:      n = %d, mean = %.4f, sd = %.4f\n", 
+            length(random_z_spreads), mean(random_z_spreads), sd(random_z_spreads)))
+cat(sprintf("Q-Learning:      n = %d, mean = %.4f, sd = %.4f\n", 
+            length(Q_z_spreads), mean(Q_z_spreads), sd(Q_z_spreads)))
+cat(sprintf("Feature:     n = %d, mean = %.4f, sd = %.4f\n", 
+            length(feature_z_spreads), mean(feature_z_spreads), sd(feature_z_spreads)))
+cat(sprintf("Non-Feature: n = %d, mean = %.4f, sd = %.4f\n", 
+            length(non_feature_z_spreads), mean(non_feature_z_spreads), sd(non_feature_z_spreads)))
+
+
+# Perform t-tests
+cat("\n", rep("=", 40), "\n")
+cat("T-TESTS:\n")
+
+# Random vs Feature
+cat("\n1. Random vs Feature:\n")
+t_test_rf <- t.test(random_z_spreads, feature_z_spreads)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rf$parameter, t_test_rf$statistic, t_test_rf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(random_z_spreads) - mean(feature_z_spreads)))
+if(t_test_rf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Random vs Non-Feature
+cat("\n2. Random vs Non-Feature:\n")
+t_test_rnf <- t.test(random_z_spreads, non_feature_z_spreads)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rnf$parameter, t_test_rnf$statistic, t_test_rnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(random_z_spreads) - mean(non_feature_z_spreads)))
+if(t_test_rnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Q vs Feature
+cat("\n1. Q-Learning vs Feature:\n")
+t_test_qf <- t.test(Q_z_spreads, feature_z_spreads)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qf$parameter, t_test_qf$statistic, t_test_qf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(Q_z_spreads) - mean(feature_z_spreads)))
+if(t_test_qf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Q vs Non-Feature
+cat("\n2. Q-Learning vs Non-Feature:\n")
+t_test_qnf <- t.test(Q_z_spreads, non_feature_z_spreads)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qnf$parameter, t_test_qnf$statistic, t_test_qnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(Q_z_spreads) - mean(non_feature_z_spreads)))
+if(t_test_qnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Feature vs Non-Feature (for reference)
+cat("\n3. Feature vs Non-Feature:\n")
+t_test_fnf <- t.test(feature_z_spreads, non_feature_z_spreads)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_fnf$parameter, t_test_fnf$statistic, t_test_fnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(feature_z_spreads) - mean(non_feature_z_spreads)))
+if(t_test_fnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Calculate effect sizes
+cat("\n", rep("-", 40), "\n")
+cat("EFFECT SIZES (Cohen's d):\n")
+
+# Function to calculate Cohen's d
+cohen_d <- function(x, y) {
+  pooled_sd <- sqrt((var(x) + var(y)) / 2)
+  (mean(x) - mean(y)) / pooled_sd
+}
+
+cat(sprintf("Random vs Feature:      d = %.3f\n", cohen_d(random_z_spreads, feature_z_spreads)))
+cat(sprintf("Random vs Non-Feature:  d = %.3f\n", cohen_d(random_z_spreads, non_feature_z_spreads)))
+cat(sprintf("Q vs Feature:      d = %.3f\n", cohen_d(Q_z_spreads, feature_z_spreads)))
+cat(sprintf("Q vs Non-Feature:  d = %.3f\n", cohen_d(Q_z_spreads, non_feature_z_spreads)))
+cat(sprintf("Feature vs Non-Feature: d = %.3f\n", cohen_d(feature_z_spreads, non_feature_z_spreads)))
+
+```
+
+```{r}
+# t test between consistency of conditions and agents
+
+cat("\n", rep("=", 60), "\n")
+cat("Consistency COMPARISONS (Using Individual Data)\n")
+cat(rep("=", 60), "\n")
+
+# Extract individual consistency values from raw_metrics
+feature_consistency <- feature_results$summary$raw_metrics$mean_consistency
+non_feature_consistency <- non_feature_results$summary$raw_metrics$mean_consistency
+random_consistency <- random_results$summary$raw_metrics$mean_consistency
+Q_consistency <- Q_optimized_results$summary$raw_metrics$mean_consistency
+
+# Calculate summary statistics
+cat("\nGROUP SUMMARY STATISTICS:\n")
+cat(rep("-", 40), "\n")
+cat(sprintf("Random:      n = %d, mean = %.4f, sd = %.4f\n", 
+            length(random_consistency), mean(random_consistency), sd(random_consistency)))
+cat(sprintf("Q-Learning:      n = %d, mean = %.4f, sd = %.4f\n", 
+            length(Q_consistency), mean(Q_consistency), sd(Q_consistency)))
+cat(sprintf("Feature:     n = %d, mean = %.4f, sd = %.4f\n", 
+            length(feature_consistency), mean(feature_consistency), sd(feature_consistency)))
+cat(sprintf("Non-Feature: n = %d, mean = %.4f, sd = %.4f\n", 
+            length(non_feature_consistency), mean(non_feature_consistency), sd(non_feature_consistency)))
+
+
+# Perform t-tests
+cat("\n", rep("=", 40), "\n")
+cat("T-TESTS:\n")
+
+# Random vs Feature
+cat("\n1. Random vs Feature:\n")
+t_test_rf <- t.test(random_consistency, feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rf$parameter, t_test_rf$statistic, t_test_rf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(random_consistency) - mean(feature_consistency)))
+if(t_test_rf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Random vs Non-Feature
+cat("\n2. Random vs Non-Feature:\n")
+t_test_rnf <- t.test(random_consistency, non_feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rnf$parameter, t_test_rnf$statistic, t_test_rnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(random_consistency) - mean(non_feature_consistency)))
+if(t_test_rnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Q vs Feature
+cat("\n1. Q-Learning vs Feature:\n")
+t_test_qf <- t.test(Q_consistency, feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qf$parameter, t_test_qf$statistic, t_test_qf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(Q_consistency) - mean(feature_consistency)))
+if(t_test_qf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Q vs Non-Feature
+cat("\n2. Q-Learning vs Non-Feature:\n")
+t_test_qnf <- t.test(Q_consistency, non_feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qnf$parameter, t_test_qnf$statistic, t_test_qnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(Q_consistency) - mean(non_feature_consistency)))
+if(t_test_qnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Feature vs Non-Feature (for reference)
+cat("\n3. Feature vs Non-Feature:\n")
+t_test_fnf <- t.test(feature_consistency, non_feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_fnf$parameter, t_test_fnf$statistic, t_test_fnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(feature_consistency) - mean(non_feature_consistency)))
+if(t_test_fnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Calculate effect sizes
+cat("\n", rep("-", 40), "\n")
+cat("EFFECT SIZES (Cohen's d):\n")
+
+# Function to calculate Cohen's d
+cohen_d <- function(x, y) {
+  pooled_sd <- sqrt((var(x) + var(y)) / 2)
+  (mean(x) - mean(y)) / pooled_sd
+}
+
+cat(sprintf("Random vs Feature:      d = %.3f\n", cohen_d(random_consistency, feature_consistency)))
+cat(sprintf("Random vs Non-Feature:  d = %.3f\n", cohen_d(random_consistency, non_feature_consistency)))
+cat(sprintf("Q vs Feature:      d = %.3f\n", cohen_d(Q_consistency, feature_consistency)))
+cat(sprintf("Q vs Non-Feature:  d = %.3f\n", cohen_d(Q_consistency, non_feature_consistency)))
+cat(sprintf("Feature vs Non-Feature: d = %.3f\n", cohen_d(feature_consistency, non_feature_consistency)))
+
+```
+
+```{r}
+# t test between lapse rate of conditions and agents
+
+cat("\n", rep("=", 60), "\n")
+cat("Lapse rate COMPARISONS (Using Individual Data)\n")
+cat(rep("=", 60), "\n")
+
+# Extract individual consistency values from raw_metrics
+feature_consistency <- feature_results$summary$raw_metrics$theta
+non_feature_consistency <- non_feature_results$summary$raw_metrics$theta
+random_consistency <- random_results$summary$raw_metrics$theta
+Q_consistency <- Q_optimized_results$summary$raw_metrics$theta
+
+# Calculate summary statistics
+cat("\nGROUP SUMMARY STATISTICS:\n")
+cat(rep("-", 40), "\n")
+cat(sprintf("Random:      n = %d, mean = %.4f, sd = %.4f\n", 
+            length(random_consistency), mean(random_consistency), sd(random_consistency)))
+cat(sprintf("Q-Learning:      n = %d, mean = %.4f, sd = %.4f\n", 
+            length(Q_consistency), mean(Q_consistency), sd(Q_consistency)))
+cat(sprintf("Feature:     n = %d, mean = %.4f, sd = %.4f\n", 
+            length(feature_consistency), mean(feature_consistency), sd(feature_consistency)))
+cat(sprintf("Non-Feature: n = %d, mean = %.4f, sd = %.4f\n", 
+            length(non_feature_consistency), mean(non_feature_consistency), sd(non_feature_consistency)))
+
+
+# Perform t-tests
+cat("\n", rep("=", 40), "\n")
+cat("T-TESTS:\n")
+
+# Random vs Feature
+cat("\n1. Random vs Feature:\n")
+t_test_rf <- t.test(random_consistency, feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rf$parameter, t_test_rf$statistic, t_test_rf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(random_consistency) - mean(feature_consistency)))
+if(t_test_rf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Random vs Non-Feature
+cat("\n2. Random vs Non-Feature:\n")
+t_test_rnf <- t.test(random_consistency, non_feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_rnf$parameter, t_test_rnf$statistic, t_test_rnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(random_consistency) - mean(non_feature_consistency)))
+if(t_test_rnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Q vs Feature
+cat("\n1. Q-Learning vs Feature:\n")
+t_test_qf <- t.test(Q_consistency, feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qf$parameter, t_test_qf$statistic, t_test_qf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(Q_consistency) - mean(feature_consistency)))
+if(t_test_qf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Q vs Non-Feature
+cat("\n2. Q-Learning vs Non-Feature:\n")
+t_test_qnf <- t.test(Q_consistency, non_feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_qnf$parameter, t_test_qnf$statistic, t_test_qnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(Q_consistency) - mean(non_feature_consistency)))
+if(t_test_qnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Feature vs Non-Feature (for reference)
+cat("\n3. Feature vs Non-Feature:\n")
+t_test_fnf <- t.test(feature_consistency, non_feature_consistency)
+cat(sprintf("   t(%.1f) = %.3f, p = %.6f\n", 
+            t_test_fnf$parameter, t_test_fnf$statistic, t_test_fnf$p.value))
+cat(sprintf("   Mean difference = %.4f\n", 
+            mean(feature_consistency) - mean(non_feature_consistency)))
+if(t_test_fnf$p.value < 0.05) {
+  cat("   ✓ Significant difference (p < 0.05)\n")
+} else {
+  cat("   ✗ No significant difference\n")
+}
+
+# Calculate effect sizes
+cat("\n", rep("-", 40), "\n")
+cat("EFFECT SIZES (Cohen's d):\n")
+
+# Function to calculate Cohen's d
+cohen_d <- function(x, y) {
+  pooled_sd <- sqrt((var(x) + var(y)) / 2)
+  (mean(x) - mean(y)) / pooled_sd
+}
+
+cat(sprintf("Random vs Feature:      d = %.3f\n", cohen_d(random_consistency, feature_consistency)))
+cat(sprintf("Random vs Non-Feature:  d = %.3f\n", cohen_d(random_consistency, non_feature_consistency)))
+cat(sprintf("Q vs Feature:      d = %.3f\n", cohen_d(Q_consistency, feature_consistency)))
+cat(sprintf("Q vs Non-Feature:  d = %.3f\n", cohen_d(Q_consistency, non_feature_consistency)))
+cat(sprintf("Feature vs Non-Feature: d = %.3f\n", cohen_d(feature_consistency, non_feature_consistency)))
+
+```
+
+```{r}
+# Calculate how many participants have consistency significantly > 0.5 using t-tests
+
+cat("\n", rep("=", 60), "\n")
+cat("CONSISTENCY ANALYSIS VS CHANCE (0.50)\n")
+cat(rep("=", 60), "\n")
+
+# Feature Group Analysis
+cat("\nFeature Group:\n")
+cat("--------------\n")
+
+# Count participants with consistency significantly > 0.5
+feature_above_chance <- 0
+feature_sig_above <- 0  # Count significantly above chance
+consistency_values_feature <- c()
+
+for(p_id in names(feature_results)[!names(feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(feature_results[[p_id]]) && 
+     "pair_consistency_data" %in% names(feature_results[[p_id]]$patterns)) {
+    cons_data <- feature_results[[p_id]]$patterns$pair_consistency_data
+    
+    if(!is.null(cons_data) && "consistency" %in% names(cons_data)) {
+      # Get the 15 consistency values for this participant
+      consistency_values <- cons_data$consistency
+      participant_mean <- mean(cons_data$consistency, na.rm = TRUE)
+      consistency_values_feature <- c(consistency_values_feature, participant_mean)
+      
+      if(sd(consistency_values) == 0) {
+        cat(sprintf("The participant %s shows no variation in consistency\n", p_id))
+        next
+      }
+      
+      # Perform one-sample t-test against 0.5
+      t_test_result <- t.test(consistency_values, mu = 0.5, alternative = "greater")
+      
+      # Count if mean > 0.5
+      if(mean(consistency_values) > 0.5) {
+        feature_above_chance <- feature_above_chance + 1
+      }
+      
+      # Count if significantly > 0.5
+      if(t_test_result$p.value < 0.05) {
+        feature_sig_above <- feature_sig_above + 1
+      }
+    }
+  }
+}
+
+total_feature <- length(names(feature_results)[!names(feature_results) %in% c("summary", "group_summary")])
+cat(sprintf("Participants with mean consistency > 0.5: %d/%d (%.1f%%)\n", 
+            feature_above_chance, total_feature, 
+            (feature_above_chance/total_feature)*100))
+cat(sprintf("Participants SIGNIFICANTLY above chance (p<0.05): %d/%d (%.1f%%)\n", 
+            feature_sig_above, total_feature, 
+            (feature_sig_above/total_feature)*100))
+
+# One-sample t-test on group mean
+group_mean_feature <- mean(consistency_values_feature)
+group_sd_feature <- sd(consistency_values_feature)
+se_feature <- group_sd_feature / sqrt(total_feature)
+t_stat_feature <- (group_mean_feature - 0.5) / se_feature
+df_feature <- total_feature - 1
+p_value_feature <- pt(t_stat_feature, df_feature, lower.tail = FALSE)  # one-tailed
+
+cat(sprintf("\nGroup statistics:\n"))
+cat(sprintf("  Mean = %.4f, SD = %.4f\n", group_mean_feature, group_sd_feature))
+cat(sprintf("  One-sample t-test vs 0.50:\n"))
+cat(sprintf("  t(%d) = %.3f, p = %.6f (one-tailed)\n", df_feature, t_stat_feature, p_value_feature))
+
+if(p_value_feature < 0.05) {
+  cat("  ✓ Significantly above chance\n")
+} else {
+  cat("  ✗ Not significantly above chance\n")
+}
+
+# Non-Feature Group Analysis
+cat("\nNon-Feature Group:\n")
+cat("------------------\n")
+
+# Count participants with consistency significantly > 0.5
+non_feature_above_chance <- 0
+non_feature_sig_above <- 0  # Count significantly above chance
+consistency_values_non_feature <- c()
+
+for(p_id in names(non_feature_results)[!names(non_feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(non_feature_results[[p_id]]) && 
+     "pair_consistency_data" %in% names(non_feature_results[[p_id]]$patterns)) {
+    cons_data <- non_feature_results[[p_id]]$patterns$pair_consistency_data
+    
+    if(!is.null(cons_data) && "consistency" %in% names(cons_data)) {
+      # Get the 15 consistency values for this participant
+      consistency_values <- cons_data$consistency
+      participant_mean <- mean(cons_data$consistency, na.rm = TRUE)
+      consistency_values_non_feature <- c(consistency_values_non_feature, participant_mean)
+      
+      if(sd(consistency_values) == 0) {
+        cat(sprintf("The participant %s shows no variation in consistency\n", p_id))
+        next
+      }
+      
+      # Perform one-sample t-test against 0.5
+      t_test_result <- t.test(consistency_values, mu = 0.5, alternative = "greater")
+      
+      # Count if mean > 0.5
+      if(mean(consistency_values) > 0.5) {
+        non_feature_above_chance <- non_feature_above_chance + 1
+      }
+      
+      # Count if significantly > 0.5
+      if(t_test_result$p.value < 0.05) {
+        non_feature_sig_above <- non_feature_sig_above + 1
+      }
+    }
+  }
+}
+
+total_non_feature <- length(names(non_feature_results)[!names(non_feature_results) %in% c("summary", "group_summary")])
+cat(sprintf("Participants with mean consistency > 0.5: %d/%d (%.1f%%)\n", 
+            non_feature_above_chance, total_non_feature, 
+            (non_feature_above_chance/total_non_feature)*100))
+cat(sprintf("Participants SIGNIFICANTLY above chance (p<0.05): %d/%d (%.1f%%)\n", 
+            non_feature_sig_above, total_non_feature, 
+            (non_feature_sig_above/total_non_feature)*100))
+
+# One-sample t-test on group mean
+group_mean_non_feature <- mean(consistency_values_non_feature)
+group_sd_non_feature <- sd(consistency_values_non_feature)
+se_non_feature <- group_sd_non_feature / sqrt(total_non_feature)
+t_stat_non_feature <- (group_mean_non_feature - 0.5) / se_non_feature
+df_non_feature <- total_non_feature - 1
+p_value_non_feature <- pt(t_stat_non_feature, df_non_feature, lower.tail = FALSE)  # one-tailed
+
+cat(sprintf("\nGroup statistics:\n"))
+cat(sprintf("  Mean = %.4f, SD = %.4f\n", group_mean_non_feature, group_sd_non_feature))
+cat(sprintf("  One-sample t-test vs 0.50:\n"))
+cat(sprintf("  t(%d) = %.3f, p = %.6f (one-tailed)\n", df_non_feature, t_stat_non_feature, p_value_non_feature))
+
+if(p_value_non_feature < 0.05) {
+  cat("  ✓ Significantly above chance\n")
+} else {
+  cat("  ✗ Not significantly above chance\n")
+}
+
+# Q-learning Agent Analysis
+cat("\nQ-learning Agents:\n")
+cat("------------------\n")
+
+# Count participants with consistency significantly > 0.5
+Q_above_chance <- 0
+Q_sig_above <- 0  # Count significantly above chance
+consistency_values_Q <- c()
+
+for(p_id in names(Q_optimized_results)[!names(Q_optimized_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(Q_optimized_results[[p_id]]) && 
+     "pair_consistency_data" %in% names(Q_optimized_results[[p_id]]$patterns)) {
+    cons_data <- Q_optimized_results[[p_id]]$patterns$pair_consistency_data
+    
+    if(!is.null(cons_data) && "consistency" %in% names(cons_data)) {
+      # Get the 15 consistency values for this participant
+      consistency_values <- cons_data$consistency
+      participant_mean <- mean(cons_data$consistency, na.rm = TRUE)
+      consistency_values_Q <- c(consistency_values_Q, participant_mean)
+      
+      if(sd(consistency_values) == 0) {
+        cat(sprintf("The participant %s shows no variation in consistency\n", p_id))
+        next
+      }
+      
+      # Perform one-sample t-test against 0.5
+      t_test_result <- t.test(consistency_values, mu = 0.5, alternative = "greater")
+      
+      # Count if mean > 0.5
+      if(mean(consistency_values) > 0.5) {
+        Q_above_chance <- Q_above_chance + 1
+      }
+      
+      # Count if significantly > 0.5
+      if(t_test_result$p.value < 0.05) {
+        Q_sig_above <- Q_sig_above + 1
+      }
+    }
+  }
+}
+
+total_Q <- length(names(Q_optimized_results)[!names(Q_optimized_results) %in% c("summary", "group_summary")])
+cat(sprintf("Participants with mean consistency > 0.5: %d/%d (%.1f%%)\n", 
+            Q_above_chance, total_Q, 
+            (Q_above_chance/total_Q)*100))
+cat(sprintf("Participants SIGNIFICANTLY above chance (p<0.05): %d/%d (%.1f%%)\n", 
+            Q_sig_above, total_Q, 
+            (Q_sig_above/total_Q)*100))
+
+# One-sample t-test on group mean
+group_mean_Q <- mean(consistency_values_Q)
+group_sd_Q <- sd(consistency_values_Q)
+se_Q <- group_sd_Q / sqrt(total_Q)
+t_stat_Q <- (group_mean_Q - 0.5) / se_Q
+df_Q <- total_Q - 1
+p_value_Q <- pt(t_stat_Q, df_Q, lower.tail = FALSE)  # one-tailed
+
+cat(sprintf("\nGroup statistics:\n"))
+cat(sprintf("  Mean = %.4f, SD = %.4f\n", group_mean_Q, group_sd_Q))
+cat(sprintf("  One-sample t-test vs 0.50:\n"))
+cat(sprintf("  t(%d) = %.3f, p = %.6f (one-tailed)\n", df_Q, t_stat_Q, p_value_Q))
+
+if(p_value_Q < 0.05) {
+  cat("  ✓ Significantly above chance\n")
+} else {
+  cat("  ✗ Not significantly above chance\n")
+}
+
+# Summary comparison
+cat("\n", rep("=", 60), "\n")
+cat("SUMMARY:\n")
+cat(sprintf("Feature: %.1f%% above chance, %.1f%% significantly above\n", 
+            (feature_above_chance/total_feature)*100,
+            (feature_sig_above/total_feature)*100))
+cat(sprintf("Non-Feature: %.1f%% above chance, %.1f%% significantly above\n", 
+            (non_feature_above_chance/total_non_feature)*100,
+            (non_feature_sig_above/total_non_feature)*100))
+cat(sprintf("Q-Learning: %.1f%% above chance, %.1f%% significantly above\n", 
+            (Q_above_chance/total_Q)*100,
+            (Q_sig_above/total_Q)*100))
+
+```
+
+```{r}
+# Calculate mean consistency and slope for different lapse value
+
+# Create empty dataframes for filtered results
+df_lapse_low <- data.frame()
+df_lapse_high <- data.frame()
+
+# Get theta values from the summary dataframe
+feature_summary_df <- feature_results$summary$raw_metrics
+
+# Loop through feature group participants
+for(i in 1:nrow(feature_summary_df)) {
+  p_id <- rownames(feature_summary_df)[i]
+  theta_val <- feature_summary_df$theta[i]
+  
+  # Skip if not a valid participant ID
+  if(!(p_id %in% names(feature_results)) || p_id == "summary" || p_id == "group_summary") {
+    next
+  }
+  
+  # Get slope and consistency for this participant
+  slope_val <- NA
+  consistency_val <- NA
+  
+  if("patterns" %in% names(feature_results[[p_id]])) {
+    if("slope" %in% names(feature_results[[p_id]]$patterns)) {
+      slope_val <- feature_results[[p_id]]$patterns$slope
+    }
+    if("pair_consistency_data" %in% names(feature_results[[p_id]]$patterns)) {
+      cons_data <- feature_results[[p_id]]$patterns$pair_consistency_data
+      if(!is.null(cons_data) && "consistency" %in% names(cons_data)) {
+        consistency_val <- mean(cons_data$consistency, na.rm = TRUE)
+      }
+    }
+  }
+  
+  # Add to appropriate dataframe based on theta
+  if(theta_val <= 0.40) {
+    df_lapse_low <- rbind(df_lapse_low, data.frame(
+      participant = p_id,
+      group = "feature",
+      theta = theta_val,
+      slope = slope_val,
+      consistency = consistency_val
+    ))
+  } else if(theta_val >= 0.70) {
+    df_lapse_high <- rbind(df_lapse_high, data.frame(
+      participant = p_id,
+      group = "feature",
+      theta = theta_val,
+      slope = slope_val,
+      consistency = consistency_val
+    ))
+  }
+}
+
+# Get theta values from non-feature summary dataframe
+non_feature_summary_df <- non_feature_results$summary$raw_metrics
+
+# Loop through non-feature group participants
+for(i in 1:nrow(non_feature_summary_df)) {
+  p_id <- rownames(non_feature_summary_df)[i]
+  theta_val <- non_feature_summary_df$theta[i]
+  
+  # Skip if not a valid participant ID
+  if(!(p_id %in% names(non_feature_results)) || p_id == "summary" || p_id == "group_summary") {
+    next
+  }
+  
+  # Get slope and consistency for this participant
+  slope_val <- NA
+  consistency_val <- NA
+  
+  if("patterns" %in% names(non_feature_results[[p_id]])) {
+    if("slope" %in% names(non_feature_results[[p_id]]$patterns)) {
+      slope_val <- non_feature_results[[p_id]]$patterns$slope
+    }
+    if("pair_consistency_data" %in% names(non_feature_results[[p_id]]$patterns)) {
+      cons_data <- non_feature_results[[p_id]]$patterns$pair_consistency_data
+      if(!is.null(cons_data) && "consistency" %in% names(cons_data)) {
+        consistency_val <- mean(cons_data$consistency, na.rm = TRUE)
+      }
+    }
+  }
+  
+  # Add to appropriate dataframe based on theta
+  if(theta_val <= 0.40) {
+    df_lapse_low <- rbind(df_lapse_low, data.frame(
+      participant = p_id,
+      group = "non_feature",
+      theta = theta_val,
+      slope = slope_val,
+      consistency = consistency_val
+    ))
+  } else if(theta_val >= 0.70) {
+    df_lapse_high <- rbind(df_lapse_high, data.frame(
+      participant = p_id,
+      group = "non_feature",
+      theta = theta_val,
+      slope = slope_val,
+      consistency = consistency_val
+    ))
+  }
+}
+
+# Calculate statistics for low lapse rate group (theta <= 0.40)
+cat("\n", rep("=", 60), "\n")
+cat("ANALYSIS BY LAPSE RATE (THETA)\n")
+cat(rep("=", 60), "\n")
+
+cat("\nLOW LAPSE RATE GROUP (theta <= 0.40):\n")
+cat("---------------------------------------\n")
+cat(sprintf("N = %d participants\n", nrow(df_lapse_low)))
+
+if(nrow(df_lapse_low) > 0) {
+  cat("\nSlope statistics:\n")
+  cat(sprintf("  Mean = %.4f, SD = %.4f\n", 
+              mean(df_lapse_low$slope, na.rm = TRUE), 
+              sd(df_lapse_low$slope, na.rm = TRUE)))
+  
+  cat("\nConsistency statistics:\n")
+  cat(sprintf("  Mean = %.4f, SD = %.4f\n", 
+              mean(df_lapse_low$consistency, na.rm = TRUE), 
+              sd(df_lapse_low$consistency, na.rm = TRUE)))
+  
+  # Show breakdown by group
+  cat("\nBreakdown by condition:\n")
+  feature_count <- sum(df_lapse_low$group == "feature")
+  non_feature_count <- sum(df_lapse_low$group == "non_feature")
+  cat(sprintf("  Feature: %d, Non-feature: %d\n", feature_count, non_feature_count))
+}
+
+# Calculate statistics for high lapse rate group (theta >= 0.70)
+cat("\nHIGH LAPSE RATE GROUP (theta >= 0.70):\n")
+cat("----------------------------------------\n")
+cat(sprintf("N = %d participants\n", nrow(df_lapse_high)))
+
+if(nrow(df_lapse_high) > 0) {
+  cat("\nSlope statistics:\n")
+  cat(sprintf("  Mean = %.4f, SD = %.4f\n", 
+              mean(df_lapse_high$slope, na.rm = TRUE), 
+              sd(df_lapse_high$slope, na.rm = TRUE)))
+  
+  cat("\nConsistency statistics:\n")
+  cat(sprintf("  Mean = %.4f, SD = %.4f\n", 
+              mean(df_lapse_high$consistency, na.rm = TRUE), 
+              sd(df_lapse_high$consistency, na.rm = TRUE)))
+  
+  # Show breakdown by group
+  cat("\nBreakdown by condition:\n")
+  feature_count <- sum(df_lapse_high$group == "feature")
+  non_feature_count <- sum(df_lapse_high$group == "non_feature")
+  cat(sprintf("  Feature: %d, Non-feature: %d\n", feature_count, non_feature_count))
+}
+
+# Display the actual participants in each group
+cat("\n", rep("-", 40), "\n")
+cat("Participants in low lapse group:\n")
+if(nrow(df_lapse_low) > 0) {
+  print(df_lapse_low[, c("participant", "group", "theta")])
+}
+
+cat("\nParticipants in high lapse group:\n")
+if(nrow(df_lapse_high) > 0) {
+  print(df_lapse_high[, c("participant", "group", "theta")])
+}
+```
+
+
+
+```{r}
+ci_count_feature <- 0
+participant_ids_feature <- names(feature_results)[!names(feature_results) %in% c("summary", "group_summary")]
+
+for(p_id in participant_ids_feature) {
+  if("static_results" %in% names(feature_results[[p_id]])) {
+    # Get the positions
+    if("positions" %in% names(feature_results[[p_id]]$static_results)) {
+      pos_data <- feature_results[[p_id]]$static_results$positions
+      
+      # Check if positions exist and calculate spread
+      if("position" %in% names(pos_data)) {
+        positions <- pos_data$position
+        
+        # If you have standard errors or other uncertainty measures
+        if("se" %in% names(pos_data)) {
+          # Calculate approximate 95% CI using standard errors
+          se <- pos_data$se
+          ci_lower <- positions - 1.96 * se
+          ci_upper <- positions + 1.96 * se
+          
+          spread_lower <- max(ci_lower) - min(ci_upper)
+          spread_upper <- max(ci_upper) - min(ci_lower)
+          
+          # Check if 0 is in the interval
+          if(spread_lower <= 0 && spread_upper >= 0) {
+            ci_count_feature <- ci_count_feature + 1
+          }
+        } else {
+          # Fallback: just check if spread is very small
+          z_spread <- max(positions) - min(positions)
+          if(z_spread < 0.5) {
+            ci_count_feature <- ci_count_feature + 1
+          }
+        }
+      }
+    }
+  }
+}
+
+total_feature <- length(participant_ids_feature)
+cat("\nFeature Group - Participants with 0 in 95% CI for z-score spread:")
+cat(sprintf(" %d/%d (%.1f%%)\n", ci_count_feature, total_feature, 
+            (ci_count_feature/total_feature)*100))
+```
+
+
+```{r}
+# Function to add white background to any ggplot
+add_white_background <- function(plot) {
+  plot + 
+    theme(panel.background = element_rect(fill = "white", color = NA),
+          plot.background = element_rect(fill = "white", color = NA),
+          legend.background = element_rect(fill = "white", color = NA))
+}
+
+participant_ids <- names(feature_results)[!names(feature_results) %in% "summary"]
+
+for (p_id in participant_ids) {
+  if ("density_plot" %in% names(feature_results[[p_id]])) {
+    # Modify the plot theme
+    feature_results[[p_id]]$density_plot <- add_white_background(feature_results[[p_id]]$density_plot)
+  }
+  
+  if ("position_plot" %in% names(feature_results[[p_id]])) {
+    feature_results[[p_id]]$position_plot <- add_white_background(feature_results[[p_id]]$position_plot)
+  }
+  
+  if ("consistency_plot" %in% names(feature_results[[p_id]]$patterns)) {
+    feature_results[[p_id]]$patterns$consistency_plot <- add_white_background(feature_results[[p_id]]$patterns$consistency_plot)
+  }
+}
+
+# Overwrite the original file
+# save(feature_results, file = "batch_results_feature_20250822.Rdata")
+```
+
+
+```{r}
+# save plots
+
+if (!dir.exists("feature_density")) {
+  dir.create("feature_density")
+}
+
+if (!dir.exists("feature_consistency")) {
+  dir.create("feature_consistency")
+}
+
+if (!dir.exists("feature_position")) {
+  dir.create("feature_position")
+}
+
+participant_ids <- names(feature_results)[!names(feature_results) %in% "summary"]
+
+# Counter for tracking
+saved_count_des <- 0
+
+saved_count_con <- 0
+
+saved_count_pos <- 0
+
+# Loop through each participant's results
+for (p_id in participant_ids) {
+  # Check if density plot exists
+  if ("density_plot" %in% names(feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("feature_density", paste0(p_id, "_density.png"))
+    ggsave(filename_png, 
+           plot = feature_results[[p_id]]$density_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("feature_density", paste0(p_id, "_density.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = feature_results[[p_id]]$density_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_des <- saved_count_des + 1
+    
+  } else {
+    cat("Warning: No density plot found for", p_id, "\n")
+  }
+  
+  # Check if consistency plot exists
+  if ("consistency_plot" %in% names(feature_results[[p_id]]$patterns)) {
+    
+    # PNG version
+    filename_png <- file.path("feature_consistency", paste0(p_id, "_consistency.png"))
+    ggsave(filename_png, 
+           plot = feature_results[[p_id]]$patterns$consistency_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("feature_consistency", paste0(p_id, "_consistency.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = feature_results[[p_id]]$patterns$consistency_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_con <- saved_count_con + 1
+    
+  } else {
+    cat("Warning: No consistency plot found for", p_id, "\n")
+  }
+  
+  # Check if position plot exists
+  if ("position_plot" %in% names(feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("feature_position", paste0(p_id, "_position.png"))
+    ggsave(filename_png, 
+           plot = feature_results[[p_id]]$position_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("feature_position", paste0(p_id, "_position.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = feature_results[[p_id]]$position_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_pos <- saved_count_pos + 1
+    
+  } else {
+    cat("Warning: No position plot found for", p_id, "\n")
+  }
+  
+}
+
+cat("\nCompleted! Saved", saved_count_des, "density plots to 'feature_density' folder\n")
+
+# Verify files were created
+cat("Files in folder:", length(list.files("feature_density", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_con, "consistency plots to 'feature_consistency' folder\n")
+
+cat("Files in folder:", length(list.files("feature_consistency", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_pos, "position plots to 'feature_position' folder\n")
+
+cat("Files in folder:", length(list.files("feature_position", pattern = "*.png")), "PNG files\n")
+
+```
+
+```{r}
+if (!dir.exists("feature_trajectory")) {
+  dir.create("feature_trajectory")
+}
+
+if (!dir.exists("feature_ranked")) {
+  dir.create("feature_ranked")
+}
+
+participant_ids <- names(feature_results)[!names(feature_results) %in% "summary"]
+
+for (p_id in participant_ids) {
+  if ("trajectory_plot" %in% names(feature_results[[p_id]])) {
+    # Modify the plot theme
+    feature_results[[p_id]]$trajectory_plot <- add_white_background(feature_results[[p_id]]$trajectory_plot)
+  }
+  
+  if ("trajectory_plot_ranked" %in% names(feature_results[[p_id]])) {
+    feature_results[[p_id]]$trajectory_plot_ranked <- add_white_background(feature_results[[p_id]]$trajectory_plot_ranked)
+  }
+
+}
+
+# Counter for tracking
+saved_count_traj <- 0
+
+saved_count_rank <- 0
+
+
+# Loop through each participant's results
+for (p_id in participant_ids) {
+  # Check if trajectory plot exists
+  if ("trajectory_plot" %in% names(feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("feature_trajectory", paste0(p_id, "_trajectory.png"))
+    ggsave(filename_png, 
+           plot = feature_results[[p_id]]$trajectory_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("feature_trajectory", paste0(p_id, "_trajectory.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = feature_results[[p_id]]$trajectory_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_traj <- saved_count_traj + 1
+    
+  } else {
+    cat("Warning: No trajectory plot found for", p_id, "\n")
+  }
+  
+  # Check if ranked trajectory plot exists
+  if ("trajectory_plot_ranked" %in% names(feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("feature_ranked", paste0(p_id, "_ranked.png"))
+    ggsave(filename_png, 
+           plot = feature_results[[p_id]]$trajectory_plot_ranked,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("feature_ranked", paste0(p_id, "_ranked.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = feature_results[[p_id]]$trajectory_plot_ranked,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_rank <- saved_count_rank + 1
+    
+  } else {
+    cat("Warning: No ranked trajectory plot found for", p_id, "\n")
+  }
+  
+}
+cat("\nCompleted! Saved", saved_count_traj, "trajectory plots to 'feature_trajectory' folder\n")
+
+cat("Files in folder:", length(list.files("feature_trajectory", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_rank, "ranked trajectory plots to 'feature_ranked' folder\n")
+
+cat("Files in folder:", length(list.files("feature_ranked", pattern = "*.png")), "PNG files\n")
+
+```
+
+
+
+```{r}
+# Load batch results
+load("batch_results_non-feature_20250826.RData")
+
+# store separately
+non_feature_results <- individual_results
+rm(individual_results)
+
+# View summary across all participants
+non_feature_results$summary
+
+# Access specific participant
+non_feature_results$F001$patterns$consistency_correlation
+
+# Loop through all participants to extract metrics
+for(p in names(non_feature_results)) {
+  if(p != "summary") {  # Skip the summary entry
+    cat("\nParticipant:", p, "\n")
+    cat("Z-score spread:", 
+        non_feature_results[[p]]$static_results$positions$position %>% 
+        {max(.) - min(.)}, "\n")
+  }
+}
+```
+
+```{r}
+ci_count_feature <- 0
+participant_ids_feature <- names(non_feature_results)[!names(non_feature_results) %in% c("summary", "group_summary")]
+
+for(p_id in participant_ids_feature) {
+  if("static_results" %in% names(non_feature_results[[p_id]])) {
+    # Get the positions
+    if("positions" %in% names(non_feature_results[[p_id]]$static_results)) {
+      pos_data <- non_feature_results[[p_id]]$static_results$positions
+      
+      # Check if positions exist and calculate spread
+      if("position" %in% names(pos_data)) {
+        positions <- pos_data$position
+        
+        # If you have standard errors or other uncertainty measures
+        if("se" %in% names(pos_data)) {
+          # Calculate approximate 95% CI using standard errors
+          se <- pos_data$se
+          ci_lower <- positions - 1.96 * se
+          ci_upper <- positions + 1.96 * se
+          
+          spread_lower <- max(ci_lower) - min(ci_upper)
+          spread_upper <- max(ci_upper) - min(ci_lower)
+          
+          # Check if 0 is in the interval
+          if(spread_lower <= 0 && spread_upper >= 0) {
+            ci_count_feature <- ci_count_feature + 1
+          }
+        } else {
+          # Fallback: just check if spread is very small
+          z_spread <- max(positions) - min(positions)
+          if(z_spread < 0.5) {
+            ci_count_feature <- ci_count_feature + 1
+          }
+        }
+      }
+    }
+  }
+}
+
+total_feature <- length(participant_ids_feature)
+cat("\nFeature Group - Participants with 0 in 95% CI for z-score spread:")
+cat(sprintf(" %d/%d (%.1f%%)\n", ci_count_feature, total_feature, 
+            (ci_count_feature/total_feature)*100))
+```
+
+
+```{r}
+# Create a new list with renamed keys
+non_feature_results_renamed <- list()
+
+# Copy all non-participant entries first (like 'summary')
+for(name in names(non_feature_results)) {
+  if(!grepl("^F\\d{3}", name)) {  # If it doesn't match F### pattern
+    non_feature_results_renamed[[name]] <- non_feature_results[[name]]
+  }
+}
+
+for(name in names(non_feature_results)) {
+  if(grepl("^F\\d{3}", name)) {  # If it matches F### pattern
+    # Extract the number part and create new name
+    number <- substr(name, 2, 4)  # Gets "001", "002", etc.
+    new_name <- paste0("N", number)
+    
+    # Copy the data with new name
+    non_feature_results_renamed[[new_name]] <- non_feature_results[[name]]
+  }
+}
+
+# Replace the original with renamed version
+non_feature_results <- non_feature_results_renamed
+rm(non_feature_results_renamed)
+```
+
+
+```{r}
+# Function to add white background to any ggplot
+add_white_background <- function(plot) {
+  plot + 
+    theme(panel.background = element_rect(fill = "white", color = NA),
+          plot.background = element_rect(fill = "white", color = NA),
+          legend.background = element_rect(fill = "white", color = NA))
+}
+
+```
+
+```{r}
+participant_ids <- names(non_feature_results)[!names(non_feature_results) %in% "summary"]
+
+for (p_id in participant_ids) {
+  if ("density_plot" %in% names(non_feature_results[[p_id]])) {
+    # Modify the plot theme
+    non_feature_results[[p_id]]$density_plot <- add_white_background(non_feature_results[[p_id]]$density_plot)
+  }
+  
+  if ("position_plot" %in% names(non_feature_results[[p_id]])) {
+    non_feature_results[[p_id]]$position_plot <- add_white_background(non_feature_results[[p_id]]$position_plot)
+  }
+  
+  if ("consistency_plot" %in% names(non_feature_results[[p_id]]$patterns)) {
+    non_feature_results[[p_id]]$patterns$consistency_plot <- add_white_background(non_feature_results[[p_id]]$patterns$consistency_plot)
+  }
+}
+
+# Overwrite the original file
+# save(non_feature_results, file = "batch_results_non-feature_20250822.Rdata")
+```
+
+
+
+```{r}
+# save plots
+
+if (!dir.exists("non_feature_density")) {
+  dir.create("non_feature_density")
+}
+
+if (!dir.exists("non_feature_consistency")) {
+  dir.create("non_feature_consistency")
+}
+
+if (!dir.exists("non_feature_position")) {
+  dir.create("non_feature_position")
+}
+
+participant_ids <- names(non_feature_results)[!names(non_feature_results) %in% "summary"]
+
+# Counter for tracking
+saved_count_des <- 0
+
+saved_count_con <- 0
+
+saved_count_pos <- 0
+
+# Loop through each participant's results
+for (p_id in participant_ids) {
+  # Check if density plot exists
+  if ("density_plot" %in% names(non_feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("non_feature_density", paste0(p_id, "_density.png"))
+    ggsave(filename_png, 
+           plot = non_feature_results[[p_id]]$density_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("non_feature_density", paste0(p_id, "_density.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = non_feature_results[[p_id]]$density_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_des <- saved_count_des + 1
+    
+  } else {
+    cat("Warning: No density plot found for", p_id, "\n")
+  }
+  
+  # Check if consistency plot exists
+  if ("consistency_plot" %in% names(non_feature_results[[p_id]]$patterns)) {
+    
+    # PNG version
+    filename_png <- file.path("non_feature_consistency", paste0(p_id, "_consistency.png"))
+    ggsave(filename_png, 
+           plot = non_feature_results[[p_id]]$patterns$consistency_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("non_feature_consistency", paste0(p_id, "_consistency.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = non_feature_results[[p_id]]$patterns$consistency_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_con <- saved_count_con + 1
+    
+  } else {
+    cat("Warning: No consistency plot found for", p_id, "\n")
+  }
+  
+  # Check if position plot exists
+  if ("position_plot" %in% names(non_feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("non_feature_position", paste0(p_id, "_position.png"))
+    ggsave(filename_png, 
+           plot = non_feature_results[[p_id]]$position_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("non_feature_position", paste0(p_id, "_position.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = non_feature_results[[p_id]]$position_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_pos <- saved_count_pos + 1
+    
+  } else {
+    cat("Warning: No position plot found for", p_id, "\n")
+  }
+  
+}
+
+cat("\nCompleted! Saved", saved_count_des, "density plots to 'non_feature_density' folder\n")
+
+# Verify files were created
+cat("Files in folder:", length(list.files("non_feature_density", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_con, "consistency plots to 'non_feature_consistency' folder\n")
+
+cat("Files in folder:", length(list.files("non_feature_consistency", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_pos, "position plots to 'non_feature_position' folder\n")
+
+cat("Files in folder:", length(list.files("non_feature_position", pattern = "*.png")), "PNG files\n")
+
+```
+
+
+
+```{r}
+if (!dir.exists("non_feature_trajectory")) {
+  dir.create("non_feature_trajectory")
+}
+
+if (!dir.exists("non_feature_ranked")) {
+  dir.create("non_feature_ranked")
+}
+
+participant_ids <- names(non_feature_results)[!names(non_feature_results) %in% "summary"]
+
+for (p_id in participant_ids) {
+  if ("trajectory_plot" %in% names(non_feature_results[[p_id]])) {
+    # Modify the plot theme
+    non_feature_results[[p_id]]$trajectory_plot <- add_white_background(non_feature_results[[p_id]]$trajectory_plot)
+  }
+  
+  if ("trajectory_plot_ranked" %in% names(non_feature_results[[p_id]])) {
+    non_feature_results[[p_id]]$trajectory_plot_ranked <- add_white_background(non_feature_results[[p_id]]$trajectory_plot_ranked)
+  }
+
+}
+
+# Counter for tracking
+saved_count_traj <- 0
+
+saved_count_rank <- 0
+
+
+# Loop through each participant's results
+for (p_id in participant_ids) {
+  # Check if trajectory plot exists
+  if ("trajectory_plot" %in% names(non_feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("non_feature_trajectory", paste0(p_id, "_trajectory.png"))
+    ggsave(filename_png, 
+           plot = non_feature_results[[p_id]]$trajectory_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("non_feature_trajectory", paste0(p_id, "_trajectory.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = non_feature_results[[p_id]]$trajectory_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_traj <- saved_count_traj + 1
+    
+  } else {
+    cat("Warning: No trajectory plot found for", p_id, "\n")
+  }
+  
+  # Check if ranked trajectory plot exists
+  if ("trajectory_plot_ranked" %in% names(non_feature_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("non_feature_ranked", paste0(p_id, "_ranked.png"))
+    ggsave(filename_png, 
+           plot = non_feature_results[[p_id]]$trajectory_plot_ranked_ranked,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("non_feature_ranked", paste0(p_id, "_ranked.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = non_feature_results[[p_id]]$trajectory_plot_ranked,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_rank <- saved_count_rank + 1
+    
+  } else {
+    cat("Warning: No ranked trajectory plot found for", p_id, "\n")
+  }
+  
+}
+cat("\nCompleted! Saved", saved_count_traj, "trajectory plots to 'non_feature_trajectory' folder\n")
+
+cat("Files in folder:", length(list.files("non_feature_trajectory", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_rank, "ranked trajectory plots to 'non_feature_ranked' folder\n")
+
+cat("Files in folder:", length(list.files("non_feature_ranked", pattern = "*.png")), "PNG files\n")
+
+```
+
+
+
+```{r}
+# Z score Diff vs. consistency
+
+all_consistency <- data.frame()
+
+# # perfect results
+# for(p_id in names(perfect_results)[!names(perfect_results) %in% c("summary", "group_summary")]) {
+#   if("patterns" %in% names(perfect_results[[p_id]]) && 
+#      "consistency_record" %in% names(perfect_results[[p_id]]$patterns)) {
+#     temp_df <- perfect_results[[p_id]]$patterns$consistency_record
+#     temp_df$participant <- p_id
+#     temp_df$condition <- "perfect"
+#     all_consistency <- rbind(all_consistency, temp_df)
+#   }
+# }
+# 
+# # random results
+# for(p_id in names(random_results)[!names(random_results) %in% c("summary", "group_summary")]) {
+#   if("patterns" %in% names(random_results[[p_id]]) && 
+#      "consistency_record" %in% names(random_results[[p_id]]$patterns)) {
+#     temp_df <- random_results[[p_id]]$patterns$consistency_record
+#     temp_df$participant <- p_id
+#     temp_df$condition <- "random"
+#     all_consistency <- rbind(all_consistency, temp_df)
+#   }
+# }
+# 
+# # Q results
+# for(p_id in names(Q_results)[!names(Q_results) %in% c("summary", "group_summary")]) {
+#   if("patterns" %in% names(Q_results[[p_id]]) && 
+#      "consistency_record" %in% names(Q_results[[p_id]]$patterns)) {
+#     temp_df <- Q_results[[p_id]]$patterns$consistency_record
+#     temp_df$participant <- p_id
+#     temp_df$condition <- "Q_Learning"
+#     all_consistency <- rbind(all_consistency, temp_df)
+#   }
+# }
+#
+# # Optimized Q results
+# for(p_id in names(Q_optimized_results)[!names(Q_optimized_results) %in% c("summary", "group_summary")]) {
+#   if("patterns" %in% names(Q_optimized_results[[p_id]]) &&
+#      "consistency_record" %in% names(Q_optimized_results[[p_id]]$patterns)) {
+#     temp_df <- Q_optimized_results[[p_id]]$patterns$consistency_record
+#     temp_df$participant <- p_id
+#     temp_df$condition <- "Q_optimized_Learning"
+#     all_consistency <- rbind(all_consistency, temp_df)
+#   }
+# }
+
+# feature results
+for(p_id in names(feature_results)[!names(feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(feature_results[[p_id]]) &&
+     "consistency_record" %in% names(feature_results[[p_id]]$patterns)) {
+    temp_df <- feature_results[[p_id]]$patterns$consistency_record
+    temp_df$participant <- p_id
+    temp_df$condition <- "feature"
+    all_consistency <- rbind(all_consistency, temp_df)
+  }
+}
+
+# non-feature results
+for(p_id in names(non_feature_results)[!names(non_feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(non_feature_results[[p_id]]) &&
+     "consistency_record" %in% names(non_feature_results[[p_id]]$patterns)) {
+    temp_df <- non_feature_results[[p_id]]$patterns$consistency_record
+    temp_df$participant <- p_id
+    temp_df$condition <- "non_feature"
+    all_consistency <- rbind(all_consistency, temp_df)
+  }
+}
+
+# Check dimensions
+cat("Total data points:", nrow(all_consistency), "\n")
+cat("Expected: 87 participants × 15 pairs = 1305\n")
+# cat("Expected: 147 agents × 15 pairs = 2205\n")
+
+# Filter data based on condition
+feature_data <- all_consistency[all_consistency$condition == "feature", ]
+non_feature_data <- all_consistency[all_consistency$condition == "non_feature", ]
+
+# Calculate correlation
+correlation_all <- cor.test(all_consistency$z_diff, all_consistency$consistency)
+cat("\nCorrelation: r =", round(correlation_all$estimate, 3), 
+    ", p =", format(correlation_all$p.value, scientific = TRUE), "\n")
+
+correlation <- cor.test(feature_data$z_diff, feature_data$consistency)
+cat("\nCorrelation for feature group: r =", round(correlation$estimate, 3), 
+    ", p =", format(correlation$p.value, scientific = TRUE), "\n")
+
+# All data
+p <- ggplot(all_consistency, aes(x = z_diff, y = consistency)) +
+  # geom_point(alpha = 0.3, size = 1.5, aes(color = condition)) +
+  geom_point(alpha = 0.3, size = 1.5, aes(color = condition), position = position_jitter(width = 0, height = 0.05)) +
+  # geom_smooth(mapping = aes(group = condition, color = condition),method = "lm", se = TRUE, size = 1.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", size = 1.2) +
+  # scale_color_manual(values = c("feature" = "#E69F00", "non-feature" = "#56B4E9")) +
+  scale_color_manual(values = c("feature" = "red", "non_feature" = "#56B4E9", "perfect" = "#E69F00", "random" = "#F716E8", "Q_Learning" = "#A9E543", "Q-Learning_Optimized" = "#FCFC17")) +
+  labs(title = "Choice Consistency vs. Ordering Strength Across All Participants",
+       subtitle = paste("r =", round(correlation_all$estimate, 3), 
+                       ", p <", ifelse(correlation_all$p.value < 0.001, "0.001", round(correlation_all$p.value, 4)),
+                       ", n =", nrow(all_consistency)),
+       x = "Z-score Difference (Ordering Strength)",
+       y = "Choice Consistency",
+       color = "Condition") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"),
+        panel.background = element_rect(fill = "white", color = NA),
+        plot.background = element_rect(fill = "white", color = NA)) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2))
+
+print(p)
+
+# Save the plot
+ggsave("consistency_vs_ordering_strength.png", p, width = 10, height = 6, dpi = 300)
+
+# feature_data
+p <- ggplot(feature_data, aes(x = z_diff, y = consistency)) +
+  # geom_point(alpha = 0.3, size = 1.5, aes(color = condition)) +
+  geom_point(alpha = 0.3, size = 1.5, aes(color = condition), position = position_jitter(width = 0, height = 0.05)) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", size = 1.2) +
+  # scale_color_manual(values = c("feature" = "#E69F00", "non-feature" = "#56B4E9")) +
+  scale_color_manual(values = c("feature" = "red", "non_feature" = "#56B4E9", "perfect" = "#E69F00", "random" = "#F716E8", "Q_Learning" = "#A9E543", "Q-Learning_Optimized" = "#FCFC17")) +
+  labs(title = "Choice Consistency vs. Ordering Strength Across All Participants",
+       subtitle = paste("r =", round(correlation$estimate, 3), 
+                       ", p <", ifelse(correlation$p.value < 0.001, "0.001", round(correlation$p.value, 4)),
+                       ", n =", nrow(feature_data)),
+       x = "Z-score Difference (Ordering Strength)",
+       y = "Choice Consistency",
+       color = "Condition") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"),
+        panel.background = element_rect(fill = "white", color = NA),
+        plot.background = element_rect(fill = "white", color = NA)) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2))
+
+print(p)
+
+# Save the plot
+ggsave("feature_consistency_vs_ordering_strength.png", p, width = 10, height = 6, dpi = 300)
+
+# Calculate correlation
+correlation <- cor.test(non_feature_data$z_diff, non_feature_data$consistency)
+cat("\nCorrelation for non-feature group: r =", round(correlation$estimate, 3), 
+    ", p =", format(correlation$p.value, scientific = TRUE), "\n")
+
+# non_feature data
+p <- ggplot(non_feature_data, aes(x = z_diff, y = consistency)) +
+  # geom_point(alpha = 0.3, size = 1.5, aes(color = condition)) +
+  geom_point(alpha = 0.3, size = 1.5, aes(color = condition), position = position_jitter(width = 0, height = 0.05)) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", size = 1.2) +
+  # scale_color_manual(values = c("feature" = "#E69F00", "non-feature" = "#56B4E9")) +
+  scale_color_manual(values = c("feature" = "red", "non_feature" = "#56B4E9", "perfect" = "#E69F00", "random" = "#F716E8", "Q_Learning" = "#A9E543", "Q-Learning_Optimized" = "#FCFC17")) +
+  labs(title = "Choice Consistency vs. Ordering Strength Across All Participants",
+       subtitle = paste("r =", round(correlation$estimate, 3), 
+                       ", p <", ifelse(correlation$p.value < 0.001, "0.001", round(correlation$p.value, 4)),
+                       ", n =", nrow(non_feature_data)),
+       x = "Z-score Difference (Ordering Strength)",
+       y = "Choice Consistency",
+       color = "Condition") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"),
+        panel.background = element_rect(fill = "white", color = NA),
+        plot.background = element_rect(fill = "white", color = NA)) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2))
+
+print(p)
+
+# Save the plot
+ggsave("non_feature_consistency_vs_ordering_strength.png", p, width = 10, height = 6, dpi = 300)
+
+```
+
+```{r}
+# slopes
+
+# Extract slopes from all agent types
+slopes_df <- data.frame()
+
+# Feature group
+for(p_id in names(feature_results)[!names(feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(feature_results[[p_id]]) &&
+     "slope" %in% names(feature_results[[p_id]]$patterns)) {
+    slopes_df <- rbind(slopes_df, data.frame(
+      participant = p_id,
+      slope = feature_results[[p_id]]$patterns$slope,
+      agent_type = "Geometrical image\n(Human)"
+    ))
+  }
+}
+
+# Non-Feature group
+for(p_id in names(non_feature_results)[!names(non_feature_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(non_feature_results[[p_id]]) &&
+     "slope" %in% names(non_feature_results[[p_id]]$patterns)) {
+    slopes_df <- rbind(slopes_df, data.frame(
+      participant = p_id,
+      slope = non_feature_results[[p_id]]$patterns$slope,
+      agent_type = "Natural image\n(Human)"
+    ))
+  }
+}
+
+# Perfect agents
+for(p_id in names(perfect_results)[!names(perfect_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(perfect_results[[p_id]]) && 
+     "slope" %in% names(perfect_results[[p_id]]$patterns)) {
+    slopes_df <- rbind(slopes_df, data.frame(
+      participant = p_id,
+      slope = perfect_results[[p_id]]$patterns$slope,
+      agent_type = "Benchmark"
+    ))
+  }
+}
+
+# Random agents
+for(p_id in names(random_results)[!names(random_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(random_results[[p_id]]) &&
+     "slope" %in% names(random_results[[p_id]]$patterns)) {
+    slopes_df <- rbind(slopes_df, data.frame(
+      participant = p_id,
+      slope = random_results[[p_id]]$patterns$slope,
+      agent_type = "Random"
+    ))
+  }
+}
+
+# Q-Learning agents
+for(p_id in names(Q_results)[!names(Q_results) %in% c("summary", "group_summary")]) {
+  if("patterns" %in% names(Q_results[[p_id]]) &&
+     "slope" %in% names(Q_results[[p_id]]$patterns)) {
+    slopes_df <- rbind(slopes_df, data.frame(
+      participant = p_id,
+      slope = Q_results[[p_id]]$patterns$slope,
+     agent_type = "Q-Learning"
+    ))
+  }
+}
+
+# # Optimized Q-Learning agents
+# for(p_id in names(Q_optimized_results)[!names(Q_optimized_results) %in% c("summary", "group_summary")]) {
+#   if("patterns" %in% names(Q_optimized_results[[p_id]]) &&
+#      "slope" %in% names(Q_optimized_results[[p_id]]$patterns)) {
+#     slopes_df <- rbind(slopes_df, data.frame(
+#       participant = p_id,
+#       slope = Q_optimized_results[[p_id]]$patterns$slope,
+#       agent_type = "Q-Learning"
+#     ))
+#   }
+# }
+
+# baseline for dashed line
+random_mean <- mean(slopes_df$slope[slopes_df$agent_type == "Random"])
+
+# Histogram
+p_hist <- ggplot(slopes_df, aes(x = slope, fill = agent_type)) +
+  geom_histogram(bins = 20, alpha = 0.7, position = "identity") +
+  facet_wrap(~agent_type, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("Geometrical image\n(Human)" = "red", "Natural image\n(Human)" = "#F716E8",  "Benchmark" = "#E69F00", "Random" = "#56B4E9", "Q-Learning" = "#A9E543", "Q-Learning_Optimized" = "#FCFC17")) +
+  labs(title = "Distribution of Ordering Slopes by Condition and Agent Type",
+       subtitle = "Histogram of z-score vs. rank regression slopes",
+       x = "Slope (z-score change per rank)",
+       y = "Count",
+       fill = "Agent Type/condition") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"),
+        panel.background = element_rect(fill = "white", color = NA),
+        plot.background = element_rect(fill = "white", color = NA),
+        legend.position = "none") +
+  geom_vline(xintercept = random_mean, linetype = "dashed", alpha = 0.5)
+
+print(p_hist)
+
+# Boxplot
+p_box <- ggplot(slopes_df, aes(x = agent_type, y = slope, fill = agent_type)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_point(position = position_jitter(width = 0.2), alpha = 0.4, size = 2) +
+  scale_fill_manual(values = c("Geometrical image\n(Human)" = "red", "Natural image\n(Human)" = "#F716E8",  "Benchmark" = "#E69F00", "Random" = "#56B4E9", "Q-Learning" = "#A9E543", "Q-Learning_Optimized" = "#FCFC17")) +
+  # labs(title = "Ordering Slopes Comparison Across Conditions and Agent Types",
+  #      subtitle = "Boxplot with individual data points",
+  #      x = "Agent Type/Conditions",
+  #      y = "Slope (z-score change per rank)",
+  #      fill = "Agent Type/Conditions") +
+    labs(title = "",
+       x = "",
+       y = "Slope (z-score change per rank)",
+       fill = "Agent Type/Conditions") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"),
+        panel.background = element_rect(fill = "white", color = NA),
+        plot.background = element_rect(fill = "white", color = NA),
+        legend.position = "none") +
+  geom_hline(yintercept = random_mean, linetype = "dashed", alpha = 0.5)
+
+print(p_box)
+
+# Violin plot with points
+p_slope <- ggplot(slopes_df, aes(x = agent_type, y = slope, fill = agent_type)) +
+  geom_violin(alpha = 0.7, scale = "width") +
+  geom_boxplot(width = 0.2, alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.1, alpha = 0.5, size = 2) +
+  scale_fill_manual(values = c("Geometrical image\n(Human)" = "red", "Natural image\n(Human)" = "#F716E8",  "Benchmark" = "#E69F00", "Random" = "#56B4E9", "Q-Learning" = "#A9E543", "Q-Learning_Optimized" = "#FCFC17")) +
+  # labs(title = "Linear Ordering Strength Across Conditions and Agent Types",
+  #      subtitle = "Slope of z-score vs. rank regression",
+  #      x = "Agent Type/Conditions",
+  #      y = "Slope (z-score change per rank)",
+  #      fill = "Agent Type/Conditions") +
+    labs(title = "Violin Plot",
+       x = "Agent Type/Conditions",
+       y = "Slope (z-score change per rank)",
+       fill = "Agent Type/Conditions") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"),
+        panel.background = element_rect(fill = "white", color = NA),
+        plot.background = element_rect(fill = "white", color = NA),
+        legend.position = "none") +
+  geom_hline(yintercept = random_mean, linetype = "dashed", alpha = 0.5)
+
+print(p_slope)
+
+ggsave("slope_violin.png", p_slope, width = 10, height = 6, dpi = 300)
+ggsave("slope_histogram.png", p_hist, width = 8, height = 10, dpi = 300)
+ggsave("slope_boxplot.png", p_box, width = 10, height = 6, dpi = 300)
+
+# Combine plots side by side with main title
+combined_plot <- grid.arrange(
+  p_slope, p_box,
+  ncol = 2,
+  top = textGrob("Linear Ordering Strength Across Conditions and Agent Types\nSlope of z-score vs. rank regression", 
+                 gp = gpar(fontsize = 14, fontface = "bold"))
+)
+
+# Save combined plot
+ggsave("slope_violin_boxplot_combined.png", combined_plot, width = 14, height = 7, dpi = 300)
+
+
+anova_result <- aov(slope ~ agent_type, data = slopes_df)
+cat("\nANOVA Results:\n")
+print(summary(anova_result))
+
+# subset_df <- slopes_df[slopes_df$agent_type %in% c("Benchmark", "Natural image\n(Human)"), ]
+# subset_df$agent_type <- factor(subset_df$agent_type) # Re-factor to drop unused levels
+# 
+# anova_subset <- aov(slope ~ agent_type, data = subset_df)
+# print("ANOVA between different conditions")
+# summary(anova_subset)
+
+# pair-wise anova
+library(multcomp)
+anova_full <- aov(slope ~ agent_type, data = slopes_df)
+tukey_test <- TukeyHSD(anova_full)
+print(tukey_test)
+
+```
+
+```{r}
+slope_summary <- slopes_df %>%
+  group_by(agent_type) %>%
+  summarise(
+    n = n(),
+    mean = round(mean(slope), 4),
+    sd = round(sd(slope), 4),
+    median = round(median(slope), 4),
+    min = round(min(slope), 4),
+    max = round(max(slope), 4),
+    Q1 = round(quantile(slope, 0.25), 4),
+    Q3 = round(quantile(slope, 0.75), 4)
+  ) %>%
+  arrange(mean)  # Sort by mean slope
+
+print(as.data.frame(slope_summary))
+```
+
+```{r}
+random_results$summary
+perfect_results$summary
+Q_optimized_results$summary
+```
+
+
+```{r}
+pub_summary <- slopes_df %>%
+  group_by(agent_type) %>%
+  summarise(
+    summary_text = sprintf("%.3f ± %.3f", mean(slope), sd(slope)),
+    median_iqr = sprintf("%.3f [%.3f, %.3f]", 
+                        median(slope),
+                        quantile(slope, 0.25),
+                        quantile(slope, 0.75)),
+    n = n()
+  )
+
+print(as.data.frame(pub_summary))
+```
+
+
+```{r}
+# Create a function to calculate Cohen's d
+calculate_cohens_d <- function(group1, group2) {
+  n1 <- length(group1)
+  n2 <- length(group2)
+  mean1 <- mean(group1)
+  mean2 <- mean(group2)
+  var1 <- var(group1)
+  var2 <- var(group2)
+  
+  # Pooled standard deviation
+  pooled_sd <- sqrt(((n1 - 1) * var1 + (n2 - 1) * var2) / (n1 + n2 - 2))
+  
+  # Cohen's d
+  d <- (mean1 - mean2) / pooled_sd
+  return(d)
+}
+
+# Your existing code with Cohen's d added
+subset_df <- slopes_df[slopes_df$agent_type %in% c("feature", "non_feature"), ]
+subset_df$agent_type <- factor(subset_df$agent_type)
+
+anova_subset <- aov(slope ~ agent_type, data = subset_df)
+print("ANOVA between different conditions")
+summary(anova_subset)
+
+t_result <- t.test(slope ~ agent_type, data = subset_df)
+cat("t-test p-value:", format(t_result$p.value, scientific = FALSE), "\n")
+t_value <- t_result$statistic
+df <- t_result$parameter
+cat(sprintf("t(%.0f) = %.3f\n", df, t_value))
+
+# Calculate Cohen's d for feature vs non_feature
+group1 <- subset_df$slope[subset_df$agent_type == levels(subset_df$agent_type)[1]]
+group2 <- subset_df$slope[subset_df$agent_type == levels(subset_df$agent_type)[2]]
+cohen_d <- calculate_cohens_d(group1, group2)
+cat(sprintf("Cohen's d = %.3f\n", abs(cohen_d)))
+
+# Create a list to store ANOVA results
+anova_results <- list()
+conditions <- c("feature", "non_feature")
+agent_types <- c("Benchmark", "Random", "Q-Learning", "Q-Learning_Optimized")
+
+# Perform ANOVA for each combination
+for(cond in conditions) {
+  for(agent in agent_types) {
+    subset_data <- slopes_df[slopes_df$agent_type %in% c(cond, agent), ]
+    
+    if(length(unique(subset_data$agent_type)) != 2) {
+      cat("\nSkipping:", cond, "vs", agent, "- insufficient data\n")
+      next
+    }
+    
+    subset_data$agent_type <- factor(subset_data$agent_type)
+    
+    # Run ANOVA
+    anova_result <- aov(slope ~ agent_type, data = subset_data)
+    comparison_name <- paste(cond, "vs", agent)
+    anova_results[[comparison_name]] <- summary(anova_result)
+    
+    # Extract p-value
+    p_value <- summary(anova_result)[[1]][["Pr(>F)"]][1]
+    
+    # Print results
+    cat("\n", rep("=", 50), "\n")
+    cat("ANOVA:", cond, "vs", agent, "\n")
+    cat("Sample sizes:", table(subset_data$agent_type), "\n")
+    cat("F-statistic:", round(summary(anova_result)[[1]][["F value"]][1], 3), "\n")
+    cat("p-value:", format(p_value, scientific = FALSE), "\n")
+    
+    # Run t-test
+    t_result <- t.test(slope ~ agent_type, data = subset_data)
+    cat("t-test p-value:", format(t_result$p.value, scientific = FALSE), "\n")
+    
+    # t value
+    t_value <- t_result$statistic
+    df <- t_result$parameter
+    cat(sprintf("t(%.0f) = %.3f\n", df, t_value))
+    
+    # Calculate Cohen's d
+    group1 <- subset_data$slope[subset_data$agent_type == levels(subset_data$agent_type)[1]]
+    group2 <- subset_data$slope[subset_data$agent_type == levels(subset_data$agent_type)[2]]
+    cohen_d <- calculate_cohens_d(group1, group2)
+    cat(sprintf("Cohen's d = %.3f\n", abs(cohen_d)))
+    
+    # Interpret effect size
+    d_abs <- abs(cohen_d)
+    if(d_abs < 0.2) {
+      effect_size <- "negligible"
+    } else if(d_abs < 0.5) {
+      effect_size <- "small"
+    } else if(d_abs < 0.8) {
+      effect_size <- "medium"
+    } else {
+      effect_size <- "large"
+    }
+    cat(sprintf("Effect size: %s\n", effect_size))
+  }
+}
+
+```
+
+
+```{r}
+load("batch_results_Q_Learning_unop_20250826.RData")
+
+Q_results <- individual_results
+rm(individual_results)
+```
+
+```{r}
+Q_optimized_results$summary
+Q_results$summary
+
+```
+
+```{r}
+# Load Q op
+load("batch_results_Q_Learning_20260114.RData")
+
+# store separately
+Q_results <- individual_results
+rm(individual_results)
+
+# Load Q unop
+# load("batch_results_Q_Learning_unop_20250826.RData")
+# 
+# # store separately
+# Q_results <- individual_results
+# rm(individual_results)
+
+# Load benchmark
+load("batch_results_perfect_20260113.RData")
+
+# store separately
+perfect_results <- individual_results
+rm(individual_results)
+
+# Load random
+load("batch_results_random_20260113.RData")
+
+# store separately
+random_results <- individual_results
+rm(individual_results)
+
+# View summary across all participants
+# Q_optimized_results$summary
+# Q_results$summary
+
+
+```
+
+```{r}
+# Create a new list with renamed keys
+Q_optimized_results_renamed <- list()
+
+# Copy all non-participant entries first (like 'summary')
+for(name in names(Q_optimized_results)) {
+  if(!grepl("^Q\\d{3}", name)) {  # If it doesn't match F### pattern
+    Q_optimized_results_renamed[[name]] <- Q_optimized_results[[name]]
+  }
+}
+
+for(name in names(Q_optimized_results)) {
+  if(grepl("^Q\\d{3}", name)) {  # If it matches F### pattern
+    # Extract the number part and create new name
+    number <- substr(name, 2, 4)  # Gets "001", "002", etc.
+    new_name <- paste0("QO", number)
+    
+    # Copy the data with new name
+    Q_optimized_results_renamed[[new_name]] <- Q_optimized_results[[name]]
+  }
+}
+
+# Replace the original with renamed version
+Q_optimized_results <- Q_optimized_results_renamed
+rm(Q_optimized_results_renamed)
+```
+
+```{r}
+
+participant_ids <- names(perfect_results)[!names(perfect_results) %in% "summary"]
+
+for (p_id in participant_ids) {
+  if ("density_plot" %in% names(perfect_results[[p_id]])) {
+    # Modify the plot theme
+    perfect_results[[p_id]]$density_plot <- add_white_background(perfect_results[[p_id]]$density_plot)
+  }
+  
+  if ("position_plot" %in% names(perfect_results[[p_id]])) {
+    perfect_results[[p_id]]$position_plot <- add_white_background(perfect_results[[p_id]]$position_plot)
+  }
+  
+  if ("consistency_plot" %in% names(perfect_results[[p_id]]$patterns)) {
+    perfect_results[[p_id]]$patterns$consistency_plot <- add_white_background(perfect_results[[p_id]]$patterns$consistency_plot)
+  }
+}
+
+# Overwrite the original file
+# save(perfect_results, file = "batch_results_non-feature_20250822.Rdata")
+```
+
+```{r}
+participant_ids <- names(random_results)[!names(random_results) %in% "summary"]
+
+for (p_id in participant_ids) {
+  if ("density_plot" %in% names(random_results[[p_id]])) {
+    # Modify the plot theme
+    random_results[[p_id]]$density_plot <- add_white_background(random_results[[p_id]]$density_plot)
+  }
+  
+  if ("position_plot" %in% names(random_results[[p_id]])) {
+    random_results[[p_id]]$position_plot <- add_white_background(random_results[[p_id]]$position_plot)
+  }
+  
+  if ("consistency_plot" %in% names(random_results[[p_id]]$patterns)) {
+    random_results[[p_id]]$patterns$consistency_plot <- add_white_background(random_results[[p_id]]$patterns$consistency_plot)
+  }
+}
+```
+
+```{r}
+participant_ids <- names(Q_results)[!names(Q_results) %in% "summary"]
+
+for (p_id in participant_ids) {
+  if ("density_plot" %in% names(Q_results[[p_id]])) {
+    # Modify the plot theme
+    Q_results[[p_id]]$density_plot <- add_white_background(Q_results[[p_id]]$density_plot)
+  }
+  
+  if ("position_plot" %in% names(Q_results[[p_id]])) {
+    Q_results[[p_id]]$position_plot <- add_white_background(Q_results[[p_id]]$position_plot)
+  }
+  
+  if ("consistency_plot" %in% names(Q_results[[p_id]]$patterns)) {
+    Q_results[[p_id]]$patterns$consistency_plot <- add_white_background(Q_results[[p_id]]$patterns$consistency_plot)
+  }
+}
+```
+
+
+```{r}
+# save plots
+
+if (!dir.exists("Q_density")) {
+  dir.create("Q_density")
+}
+
+if (!dir.exists("Q_consistency")) {
+  dir.create("Q_consistency")
+}
+
+if (!dir.exists("Q_position")) {
+  dir.create("Q_position")
+}
+
+participant_ids <- names(Q_results)[!names(Q_results) %in% "summary"]
+
+# Counter for tracking
+saved_count_des <- 0
+
+saved_count_con <- 0
+
+saved_count_pos <- 0
+
+# Loop through each participant's results
+for (p_id in participant_ids) {
+  # Check if density plot exists
+  if ("density_plot" %in% names(Q_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("Q_density", paste0(p_id, "_density.png"))
+    ggsave(filename_png, 
+           plot = Q_results[[p_id]]$density_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("Q_density", paste0(p_id, "_density.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = Q_results[[p_id]]$density_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_des <- saved_count_des + 1
+    
+  } else {
+    cat("Warning: No density plot found for", p_id, "\n")
+  }
+  
+  # Check if consistency plot exists
+  if ("consistency_plot" %in% names(Q_results[[p_id]]$patterns)) {
+    
+    # PNG version
+    filename_png <- file.path("Q_consistency", paste0(p_id, "_consistency.png"))
+    ggsave(filename_png, 
+           plot = Q_results[[p_id]]$patterns$consistency_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("Q_consistency", paste0(p_id, "_consistency.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = Q_results[[p_id]]$patterns$consistency_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_con <- saved_count_con + 1
+    
+  } else {
+    cat("Warning: No consistency plot found for", p_id, "\n")
+  }
+  
+  # Check if position plot exists
+  if ("position_plot" %in% names(Q_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("Q_position", paste0(p_id, "_position.png"))
+    ggsave(filename_png, 
+           plot = Q_results[[p_id]]$position_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("Q_position", paste0(p_id, "_position.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = Q_results[[p_id]]$position_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_pos <- saved_count_pos + 1
+    
+  } else {
+    cat("Warning: No position plot found for", p_id, "\n")
+  }
+  
+}
+
+cat("\nCompleted! Saved", saved_count_des, "density plots to 'Q_density' folder\n")
+
+# Verify files were created
+cat("Files in folder:", length(list.files("Q_density", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_con, "consistency plots to 'Q_consistency' folder\n")
+
+cat("Files in folder:", length(list.files("Q_consistency", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_pos, "position plots to 'Q_position' folder\n")
+
+cat("Files in folder:", length(list.files("Q_position", pattern = "*.png")), "PNG files\n")
+
+```
+
+```{r}
+# save plots
+
+if (!dir.exists("perfect_density")) {
+  dir.create("perfect_density")
+}
+
+if (!dir.exists("perfect_consistency")) {
+  dir.create("perfect_consistency")
+}
+
+if (!dir.exists("perfect_position")) {
+  dir.create("perfect_position")
+}
+
+participant_ids <- names(perfect_results)[!names(perfect_results) %in% "summary"]
+
+# Counter for tracking
+saved_count_des <- 0
+
+saved_count_con <- 0
+
+saved_count_pos <- 0
+
+# Loop through each participant's results
+for (p_id in participant_ids) {
+  # Check if density plot exists
+  if ("density_plot" %in% names(perfect_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("perfect_density", paste0(p_id, "_density.png"))
+    ggsave(filename_png, 
+           plot = perfect_results[[p_id]]$density_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("perfect_density", paste0(p_id, "_density.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = perfect_results[[p_id]]$density_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_des <- saved_count_des + 1
+    
+  } else {
+    cat("Warning: No density plot found for", p_id, "\n")
+  }
+  
+  # Check if consistency plot exists
+  if ("consistency_plot" %in% names(perfect_results[[p_id]]$patterns)) {
+    
+    # PNG version
+    filename_png <- file.path("perfect_consistency", paste0(p_id, "_consistency.png"))
+    ggsave(filename_png, 
+           plot = perfect_results[[p_id]]$patterns$consistency_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("perfect_consistency", paste0(p_id, "_consistency.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = perfect_results[[p_id]]$patterns$consistency_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_con <- saved_count_con + 1
+    
+  } else {
+    cat("Warning: No consistency plot found for", p_id, "\n")
+  }
+  
+  # Check if position plot exists
+  if ("position_plot" %in% names(perfect_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("perfect_position", paste0(p_id, "_position.png"))
+    ggsave(filename_png, 
+           plot = perfect_results[[p_id]]$position_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("perfect_position", paste0(p_id, "_position.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = perfect_results[[p_id]]$position_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_pos <- saved_count_pos + 1
+    
+  } else {
+    cat("Warning: No position plot found for", p_id, "\n")
+  }
+  
+}
+
+cat("\nCompleted! Saved", saved_count_des, "density plots to 'perfect_density' folder\n")
+
+# Verify files were created
+cat("Files in folder:", length(list.files("perfect_density", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_con, "consistency plots to 'perfect_consistency' folder\n")
+
+cat("Files in folder:", length(list.files("perfect_consistency", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_pos, "position plots to 'perfect_position' folder\n")
+
+cat("Files in folder:", length(list.files("perfect_position", pattern = "*.png")), "PNG files\n")
+
+```
+
+```{r}
+# save plots
+
+if (!dir.exists("random_density")) {
+  dir.create("random_density")
+}
+
+if (!dir.exists("random_consistency")) {
+  dir.create("random_consistency")
+}
+
+if (!dir.exists("random_position")) {
+  dir.create("random_position")
+}
+
+participant_ids <- names(random_results)[!names(random_results) %in% "summary"]
+
+# Counter for tracking
+saved_count_des <- 0
+
+saved_count_con <- 0
+
+saved_count_pos <- 0
+
+# Loop through each participant's results
+for (p_id in participant_ids) {
+  # Check if density plot exists
+  if ("density_plot" %in% names(random_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("random_density", paste0(p_id, "_density.png"))
+    ggsave(filename_png, 
+           plot = random_results[[p_id]]$density_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("random_density", paste0(p_id, "_density.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = random_results[[p_id]]$density_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_des <- saved_count_des + 1
+    
+  } else {
+    cat("Warning: No density plot found for", p_id, "\n")
+  }
+  
+  # Check if consistency plot exists
+  if ("consistency_plot" %in% names(random_results[[p_id]]$patterns)) {
+    
+    # PNG version
+    filename_png <- file.path("random_consistency", paste0(p_id, "_consistency.png"))
+    ggsave(filename_png, 
+           plot = random_results[[p_id]]$patterns$consistency_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("random_consistency", paste0(p_id, "_consistency.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = random_results[[p_id]]$patterns$consistency_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_con <- saved_count_con + 1
+    
+  } else {
+    cat("Warning: No consistency plot found for", p_id, "\n")
+  }
+  
+  # Check if position plot exists
+  if ("position_plot" %in% names(random_results[[p_id]])) {
+    
+    # PNG version
+    filename_png <- file.path("random_position", paste0(p_id, "_position.png"))
+    ggsave(filename_png, 
+           plot = random_results[[p_id]]$position_plot,
+           width = 10, 
+           height = 6, 
+           dpi = 300)
+    
+    # PDF version
+    # filename_pdf <- file.path("random_position", paste0(p_id, "_position.pdf"))
+    # ggsave(filename_pdf, 
+    #        plot = random_results[[p_id]]$position_plot,
+    #        width = 10, 
+    #        height = 6, 
+    #        device = "pdf")
+    
+    cat("Saved:", filename_png, "\n")
+    saved_count_pos <- saved_count_pos + 1
+    
+  } else {
+    cat("Warning: No position plot found for", p_id, "\n")
+  }
+  
+}
+
+cat("\nCompleted! Saved", saved_count_des, "density plots to 'random_density' folder\n")
+
+# Verify files were created
+cat("Files in folder:", length(list.files("random_density", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_con, "consistency plots to 'random_consistency' folder\n")
+
+cat("Files in folder:", length(list.files("random_consistency", pattern = "*.png")), "PNG files\n")
+
+cat("\nCompleted! Saved", saved_count_pos, "position plots to 'random_position' folder\n")
+
+cat("Files in folder:", length(list.files("random_position", pattern = "*.png")), "PNG files\n")
+
+```
+
+
+
+
+
+
